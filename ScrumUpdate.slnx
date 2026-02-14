@@ -1,4 +1,10 @@
 <Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".editorconfig" />
+    <File Path=".gitattributes" />
+    <File Path=".gitignore" />
+    <File Path="README.md" />
+  </Folder>
   <Project Path="src/ScrumUpdate.AppHost/ScrumUpdate.AppHost.csproj" />
   <Project Path="src/ScrumUpdate.ServiceDefaults/ScrumUpdate.ServiceDefaults.csproj" />
   <Project Path="src/ScrumUpdate.Web/ScrumUpdate.Web.csproj" />

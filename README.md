@@ -1,26 +1,23 @@
-# AI Chat with Custom Data
+# Scrum Update
 
-This project is an AI chat application that demonstrates how to chat with custom data using an AI language model. Please note that this template is currently in an early preview stage. If you have feedback, please take a [brief survey](https://aka.ms/dotnet-chat-templatePreview2-survey).
+Scrum Update is a Blazor-based chat application built with .NET 10 that provides a conversational interface. This application demonstrates a simple chat interface with a dummy AI response for testing and development purposes.
 
 >[!NOTE]
-> Before running this project you need to configure the API keys or endpoints for the providers you have chosen. See below for details specific to your choices.
+> This application uses a dummy AI client that returns simulated responses. No external AI service or Ollama installation is required to run this application.
 
-### Known Issues
+## Features
 
-#### Errors running Ollama or Docker
+- **Blazor Server** - Interactive web UI with real-time updates
+- **Dummy AI Client** - Simulated responses for testing without external dependencies
+- **.NET 10** - Built with the latest .NET framework
+- **Easy to extend** - Replace the dummy client with your preferred AI provider (Ollama, Azure OpenAI, etc.)
 
-A recent incompatibility was found between Ollama and Docker Desktop. This issue results in runtime errors when connecting to Ollama, and the workaround for that can lead to Docker not working for Aspire projects.
+# Setup
 
-This incompatibility can be addressed by upgrading to Docker Desktop 4.41.1. See [ollama/ollama#9509](https://github.com/ollama/ollama/issues/9509#issuecomment-2842461831) for more information and a link to install the version of Docker Desktop with the fix.
+## Prerequisites
 
-# Configure the AI Model Provider
-
-## Setting up a local environment for Ollama
-This project is configured to run Ollama in a Docker container. Docker Desktop must be installed and running for the project to run successfully. An Ollama container will automatically start when running the application.
-
-Download, install, and run Docker Desktop from the [official website](https://www.docker.com/). Follow the installation instructions specific to your operating system.
-
-Note: Ollama and Docker are excellent open source products, but are not maintained by Microsoft.
+- **.NET 10 SDK** - Required to build and run the application
+- **Visual Studio 2022+** or **Visual Studio Code** with C# Dev Kit
 
 
 # Running the application
@@ -46,6 +43,21 @@ See [Troubleshoot untrusted localhost certificate in Aspire](https://learn.micro
 # Updating JavaScript dependencies
 
 This template leverages JavaScript libraries to provide essential functionality. These libraries are located in the wwwroot/lib folder of the ScrumUpdate.Web project. For instructions on updating each dependency, please refer to the README.md file in each respective folder.
+
+## Customizing the AI Client
+
+The application currently uses a `DummyChatClient` that returns simulated responses. To integrate a real AI provider:
+
+1. Modify `Program.cs` in the ScrumUpdate.Web project
+2. Replace the `DummyChatClient` registration with your preferred AI provider
+3. Example with Ollama:
+   ```csharp
+   // Instead of:
+   // IChatClient chatClient = new DummyChatClient();
+
+   // Use:
+   IChatClient chatClient = new OllamaApiClient(new Uri("http://localhost:11434"), "llama2");
+   ```
 
 # Learn More
 To learn more about development with .NET and AI, check out the following links:
