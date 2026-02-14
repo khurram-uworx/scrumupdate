@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/ScrumUpdate.AppHost/ScrumUpdate.AppHost.csproj" />
+  <Project Path="src/ScrumUpdate.ServiceDefaults/ScrumUpdate.ServiceDefaults.csproj" />
+  <Project Path="src/ScrumUpdate.Web/ScrumUpdate.Web.csproj" />
+</Solution>

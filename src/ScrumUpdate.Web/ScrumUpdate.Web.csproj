@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>7d4e04f8-39f3-47f4-8ac0-8ee42f32f284</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Aspire.OllamaSharp" Version="13.0.0-beta.444" />
+    <PackageReference Include="OllamaSharp" Version="5.4.12" />
+    <PackageReference Include="Microsoft.Extensions.AI" Version="10.3.0" />
+    <PackageReference Include="Microsoft.Extensions.DataIngestion" Version="10.3.0-preview.1.26109.11" />
+    <PackageReference Include="Microsoft.Extensions.DataIngestion.Markdig" Version="10.3.0-preview.1.26109.11" />
+    <PackageReference Include="Microsoft.Extensions.DataIngestion.MarkItDown" Version="10.3.0-preview.1.26109.11" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="1.0.1" />
+    <PackageReference Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="1.0.1" />
+    <PackageReference Include="Microsoft.SemanticKernel.Connectors.SqliteVec" Version="1.67.1-preview" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ScrumUpdate.ServiceDefaults\ScrumUpdate.ServiceDefaults.csproj" />
+  </ItemGroup>
+
+</Project>
