@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using ScrumUpdate.Web.Data;
 using ScrumUpdate.Web.Services;
@@ -12,12 +13,12 @@ public class ChatSessionWorkflowIntegrationTests
     TestChatWorkflow workflow = null!;
 
     [SetUp]
-    public async Task Setup()
+    public Task Setup()
     {
         dbContext = TestDatabaseFixture.CreateTestDbContext();
         sessionService = new ChatSessionService(dbContext);
         workflow = new TestChatWorkflow(sessionService, new DummyChatClient());
-        await workflow.InitializeAsync();
+        return Task.CompletedTask;
     }
 
     [TearDown]
@@ -27,124 +28,70 @@ public class ChatSessionWorkflowIntegrationTests
     }
 
     [Test]
-    public async Task SessionSwitching_RestoresEachSessionConversation()
+    public async Task NonScrumMessage_DoesNotCreateSession()
     {
-        var chat1Id = workflow.CurrentSessionId;
         await workflow.SendAsync("hi");
 
-        await workflow.CreateNewChatAsync();
-        var chat2Id = workflow.CurrentSessionId;
-        await workflow.SendAsync("hey there");
+        Assert.That(workflow.CurrentSessionId, Is.Null);
+        Assert.That(await dbContext.ChatSessions.CountAsync(), Is.EqualTo(0));
+    }
 
-        await workflow.LoadSessionAsync(chat1Id);
-        var chat1Texts = workflow.UserAssistantMessages.Select(m => m.Text).ToArray();
-        Assert.That(chat1Texts,
-            Is.EqualTo(new[] { "hi", "I am dummy AI and don't know how to respond" }));
+    [Test]
+    public async Task ScrumThenRegenerate_AppendsMessagesAndKeepsLatestRichData()
+    {
+        await workflow.SendAsync("scrum update");
+        var sessionId = workflow.CurrentSessionId;
+        Assert.That(sessionId, Is.Not.Null);
 
-        await workflow.LoadSessionAsync(chat2Id);
-        var chat2Texts = workflow.UserAssistantMessages.Select(m => m.Text).ToArray();
-        Assert.That(chat2Texts,
-            Is.EqualTo(new[] { "hey there", "I am dummy AI and don't know how to respond" }));
+        await workflow.SendAsync("regenerate");
+        var loaded = await sessionService.GetSessionAsync(sessionId!.Value);
+        var loadedMessages = loaded!.Messages.ToList();
+
+        Assert.That(loaded, Is.Not.Null);
+        Assert.That(loadedMessages.Count, Is.EqualTo(4));
+        Assert.That(loadedMessages[1].Content, Does.StartWith("Scrum update for "));
+        Assert.That(loadedMessages[3].Content, Does.StartWith("Scrum update for "));
+        Assert.That(loadedMessages[3].Content, Is.Not.EqualTo(loadedMessages[1].Content));
+
+        Assert.That(loaded.DayWiseScrumUpdate, Is.Not.Null);
+        Assert.That(loadedMessages[3].Content, Does.Contain(loaded.DayWiseScrumUpdate!.WhatIDidYesterday));
+        Assert.That(loadedMessages[3].Content, Does.Contain(loaded.DayWiseScrumUpdate.WhatIPlanToDoToday));
+        Assert.That(loadedMessages[3].Content, Does.Contain(loaded.DayWiseScrumUpdate.Blocker));
     }
 
     sealed class TestChatWorkflow
     {
-        const string SystemPrompt = "You are a helpful assistant.";
-
         readonly ChatSessionService sessionService;
-        readonly IChatClient chatClient;
-        readonly ChatOptions chatOptions = new();
+        readonly DummyChatClient chatClient;
         readonly List<ChatMessage> messages = [];
 
-        ChatSession? currentSession;
+        public int? CurrentSessionId { get; private set; }
 
-        public int CurrentSessionId => currentSession?.Id ?? throw new InvalidOperationException("No active session.");
-
-        public IReadOnlyList<ChatMessage> UserAssistantMessages =>
-            messages.Where(m => m.Role == ChatRole.User || m.Role == ChatRole.Assistant).ToList();
-
-        public TestChatWorkflow(ChatSessionService sessionService, IChatClient chatClient)
+        public TestChatWorkflow(ChatSessionService sessionService, DummyChatClient chatClient)
         {
             this.sessionService = sessionService;
             this.chatClient = chatClient;
-        }
-
-        public async Task InitializeAsync()
-        {
-            messages.Clear();
-            messages.Add(new ChatMessage(ChatRole.System, SystemPrompt));
-            currentSession = await sessionService.CreateSessionAsync();
         }
 
         public async Task SendAsync(string userText)
         {
             messages.Add(new ChatMessage(ChatRole.User, userText));
 
-            var responseText = string.Empty;
-            await foreach (var update in chatClient.GetStreamingResponseAsync(messages, chatOptions))
+            var response = await chatClient.GetResponseAsync(messages);
+            messages.Add(response.Messages.Single());
+
+            var generatedScrumUpdate = chatClient.TryParseGeneratedScrumUpdateFromAssistantMessage(response.Messages.Single().Text ?? string.Empty);
+
+            if (generatedScrumUpdate != null)
             {
-                responseText += update.Text;
+                var session = await sessionService.GetOrCreateSessionForScrumUpdateAsync(generatedScrumUpdate);
+                CurrentSessionId = session.Id;
+                await sessionService.SaveSessionAsync(
+                    session.Id,
+                    messages
+                        .Where(m => m.Role == ChatRole.User || m.Role == ChatRole.Assistant)
+                        .Select(m => (m.Role.ToString(), m.Text ?? string.Empty)));
             }
-
-            messages.Add(new ChatMessage(ChatRole.Assistant, responseText));
-            await SaveCurrentAsync();
-        }
-
-        public async Task CreateNewChatAsync()
-        {
-            await SaveCurrentAsync();
-            messages.Clear();
-            messages.Add(new ChatMessage(ChatRole.System, SystemPrompt));
-            currentSession = await sessionService.CreateSessionAsync();
-            chatOptions.ConversationId = null;
-        }
-
-        public async Task LoadSessionAsync(int sessionId)
-        {
-            await SaveCurrentAsync();
-
-            var session = await sessionService.GetSessionAsync(sessionId);
-            if (session == null)
-            {
-                throw new InvalidOperationException($"Session {sessionId} not found.");
-            }
-
-            currentSession = session;
-            messages.Clear();
-            messages.Add(new ChatMessage(ChatRole.System, SystemPrompt));
-
-            foreach (var stored in session.Messages.OrderBy(m => m.Timestamp).ThenBy(m => m.Id))
-            {
-                var role = stored.Role.ToLowerInvariant() switch
-                {
-                    "user" => ChatRole.User,
-                    "assistant" => ChatRole.Assistant,
-                    _ => ChatRole.System
-                };
-
-                messages.Add(new ChatMessage(role, stored.Content));
-            }
-        }
-
-        async Task SaveCurrentAsync()
-        {
-            if (currentSession == null)
-            {
-                return;
-            }
-
-            var toPersist = messages
-                .Where(m => m.Role == ChatRole.User || m.Role == ChatRole.Assistant)
-                .Select(m => (m.Role.ToString(), m.Text ?? string.Empty))
-                .Where(m => !string.IsNullOrWhiteSpace(m.Item2))
-                .ToList();
-
-            if (toPersist.Count == 0)
-            {
-                return;
-            }
-
-            await sessionService.SaveSessionAsync(currentSession.Id, toPersist);
         }
     }
 }

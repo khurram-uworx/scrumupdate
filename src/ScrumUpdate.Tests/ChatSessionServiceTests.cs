@@ -1,5 +1,6 @@
 using ScrumUpdate.Web.Data;
 using ScrumUpdate.Web.Services;
+using Microsoft.EntityFrameworkCore;
 
 namespace ScrumUpdate.Tests;
 
@@ -23,19 +24,55 @@ public class ChatSessionServiceTests
     }
 
     [Test]
-    public async Task CreateSessionAsync_IncrementsSessionTitle()
+    public async Task GetOrCreateSessionForScrumUpdateAsync_ReusesSessionForSameDate()
     {
-        var first = await sessionService.CreateSessionAsync();
-        var second = await sessionService.CreateSessionAsync();
+        var scrumDate = new DateOnly(2026, 2, 15);
 
-        Assert.That(first.Title, Is.EqualTo("Chat 1"));
-        Assert.That(second.Title, Is.EqualTo("Chat 2"));
+        var first = await sessionService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(scrumDate));
+        var second = await sessionService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(scrumDate));
+
+        Assert.That(first.Id, Is.EqualTo(second.Id));
+        Assert.That(await dbContext.ChatSessions.CountAsync(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task GetOrCreateSessionForScrumUpdateAsync_UpdatesRichDataWithLatestGeneration()
+    {
+        var scrumDate = new DateOnly(2026, 2, 15);
+        var first = new GeneratedScrumUpdate
+        {
+            ScrumDate = scrumDate,
+            GeneratedTimeUtc = new DateTime(2026, 2, 15, 9, 0, 0, DateTimeKind.Utc),
+            WhatIDidYesterday = "Finished login page.",
+            WhatIPlanToDoToday = "Start scrum update flow.",
+            Blocker = "No blocker."
+        };
+        var second = new GeneratedScrumUpdate
+        {
+            ScrumDate = scrumDate,
+            GeneratedTimeUtc = new DateTime(2026, 2, 15, 9, 30, 0, DateTimeKind.Utc),
+            WhatIDidYesterday = "Finished login page and bug fixes.",
+            WhatIPlanToDoToday = "Finalize scrum update flow.",
+            Blocker = "Waiting for API key."
+        };
+
+        var session = await sessionService.GetOrCreateSessionForScrumUpdateAsync(first);
+        await sessionService.GetOrCreateSessionForScrumUpdateAsync(second);
+
+        var loaded = await sessionService.GetSessionAsync(session.Id);
+
+        Assert.That(loaded, Is.Not.Null);
+        Assert.That(loaded!.DayWiseScrumUpdate, Is.Not.Null);
+        Assert.That(loaded.DayWiseScrumUpdate!.GeneratedTime, Is.EqualTo(second.GeneratedTimeUtc));
+        Assert.That(loaded.DayWiseScrumUpdate.WhatIDidYesterday, Is.EqualTo(second.WhatIDidYesterday));
+        Assert.That(loaded.DayWiseScrumUpdate.WhatIPlanToDoToday, Is.EqualTo(second.WhatIPlanToDoToday));
+        Assert.That(loaded.DayWiseScrumUpdate.Blocker, Is.EqualTo(second.Blocker));
     }
 
     [Test]
     public async Task SaveSessionAsync_ReplacesExistingMessages()
     {
-        var session = await sessionService.CreateSessionAsync();
+        var session = await sessionService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(new DateOnly(2026, 2, 15)));
 
         await sessionService.SaveSessionAsync(session.Id,
         [
@@ -59,7 +96,7 @@ public class ChatSessionServiceTests
     [Test]
     public async Task GetSessionAsync_ReturnsMessagesOrderedByTimestamp()
     {
-        var session = await sessionService.CreateSessionAsync();
+        var session = await sessionService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(new DateOnly(2026, 2, 15)));
 
         await sessionService.SaveMessageAsync(session.Id, "User", "First");
         await Task.Delay(10);
@@ -76,16 +113,16 @@ public class ChatSessionServiceTests
     }
 
     [Test]
-    public async Task TwoSessions_KeepIndependentMessageHistoryWhenSwitching()
+    public async Task TwoSessions_KeepIndependentMessageHistoryWhenSwitchingDates()
     {
-        var chat1 = await sessionService.CreateSessionAsync();
+        var chat1 = await sessionService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(new DateOnly(2026, 2, 14)));
         await sessionService.SaveSessionAsync(chat1.Id,
         [
             ("User", "hi"),
             ("Assistant", "hello there")
         ]);
 
-        var chat2 = await sessionService.CreateSessionAsync();
+        var chat2 = await sessionService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(new DateOnly(2026, 2, 15)));
         await sessionService.SaveSessionAsync(chat2.Id,
         [
             ("User", "hey there"),
@@ -103,5 +140,17 @@ public class ChatSessionServiceTests
 
         Assert.That(loadedChat2!.Messages.Select(m => (m.Role, m.Content)),
             Is.EqualTo(new[] { ("user", "hey there"), ("assistant", "hi again") }));
+    }
+
+    static GeneratedScrumUpdate CreateScrumUpdate(DateOnly scrumDate)
+    {
+        return new GeneratedScrumUpdate
+        {
+            ScrumDate = scrumDate,
+            GeneratedTimeUtc = scrumDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            WhatIDidYesterday = "Worked on session persistence.",
+            WhatIPlanToDoToday = "Add scrum update tagging.",
+            Blocker = "No blocker."
+        };
     }
 }

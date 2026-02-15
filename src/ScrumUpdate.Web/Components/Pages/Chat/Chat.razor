@@ -3,6 +3,7 @@
 @using ScrumUpdate.Web.Services
 @inject ChatSessionService SessionService
 @inject IChatClient ChatClient
+@inject IScrumUpdateGenerator ScrumUpdateGenerator
 @implements IAsyncDisposable
 
 <PageTitle>Scrum Update</PageTitle>
@@ -87,14 +88,13 @@
         messages.Clear();
         messages.Add(new(ChatRole.System, SystemPrompt));
         chatOptions.Tools = [];
-        await CreateNewSessionAsync();
     }
 
     async Task CreateNewChatAsync()
     {
         CancelAnyCurrentResponse();
         await SaveCurrentSessionAsync();
-        await CreateNewSessionAsync();
+        currentSession = null;
 
         messages.Clear();
         messages.Add(new(ChatRole.System, SystemPrompt));
@@ -102,7 +102,6 @@
         statefulMessageCount = 0;
 
         chatSuggestions?.Clear();
-        await NotifySessionChangedAsync();
         StateHasChanged();
     }
 
@@ -154,7 +153,6 @@
     async Task AddUserMessageAndGetResponseAsync(ChatMessage userMessage)
     {
         CancelAnyCurrentResponse();
-
         messages.Add(userMessage);
         StateHasChanged();
 
@@ -188,7 +186,60 @@
             StateHasChanged();
         }
 
+        var lastAssistantMessage = messages.LastOrDefault(m => m.Role == ChatRole.Assistant);
+        var assistantText = lastAssistantMessage == null ? string.Empty : ExtractMessageContent(lastAssistantMessage);
+        var generatedScrumUpdate = ScrumUpdateGenerator.TryParseGeneratedScrumUpdateFromAssistantMessage(assistantText);
+        if (generatedScrumUpdate != null)
+        {
+            await EnsureScrumSessionAsync(generatedScrumUpdate);
+        }
+
         await SaveCurrentSessionAsync();
+        await NotifySessionChangedAsync();
+    }
+
+    async Task EnsureScrumSessionAsync(GeneratedScrumUpdate generatedScrumUpdate)
+    {
+        var session = await SessionService.GetOrCreateSessionForScrumUpdateAsync(generatedScrumUpdate);
+
+        if (currentSession?.Id == session.Id)
+        {
+            currentSession = session;
+            return;
+        }
+
+        var transientMessages = messages
+            .Where(m => m.Role == ChatRole.User || m.Role == ChatRole.Assistant)
+            .Select(m => new ChatMessage(m.Role, [new TextContent(ExtractMessageContent(m))]))
+            .ToList();
+
+        currentSession = session;
+        messages.Clear();
+        messages.Add(new(ChatRole.System, SystemPrompt));
+
+        if (session.Messages is { Count: > 0 })
+        {
+            foreach (var messageEntity in session.Messages.OrderBy(m => m.Timestamp).ThenBy(m => m.Id))
+            {
+                var role = messageEntity.Role.ToLowerInvariant() switch
+                {
+                    "user" => ChatRole.User,
+                    "assistant" => ChatRole.Assistant,
+                    _ => ChatRole.System
+                };
+
+                messages.Add(new ChatMessage(role, [new TextContent(messageEntity.Content)]));
+            }
+        }
+
+        if (transientMessages.Count > 0)
+        {
+            messages.AddRange(transientMessages);
+        }
+
+        chatOptions.ConversationId = null;
+        statefulMessageCount = 0;
+        chatSuggestions?.Update(messages);
         await NotifySessionChangedAsync();
     }
 
@@ -211,11 +262,6 @@
         }
 
         await SessionService.SaveSessionAsync(currentSession.Id, messagesToSave);
-    }
-
-    async Task CreateNewSessionAsync()
-    {
-        currentSession = await SessionService.CreateSessionAsync();
     }
 
     async Task NotifySessionChangedAsync()

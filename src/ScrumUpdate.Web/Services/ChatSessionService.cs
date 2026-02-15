@@ -13,18 +13,52 @@ public class ChatSessionService
         this.dbContext = dbContext;
     }
 
-    public async Task<ChatSession> CreateSessionAsync()
+    public async Task<ChatSession> GetOrCreateSessionForScrumUpdateAsync(GeneratedScrumUpdate scrumUpdate)
     {
-        var sessionCount = await dbContext.ChatSessions
-            .Where(s => s.UserId == DefaultUserId)
-            .CountAsync();
+        var existingSession = await dbContext.ChatSessions
+            .Include(s => s.DayWiseScrumUpdate)
+            .Include(s => s.Messages)
+            .FirstOrDefaultAsync(s => s.UserId == DefaultUserId && s.ScrumDate == scrumUpdate.ScrumDate);
+
+        if (existingSession != null)
+        {
+            if (existingSession.DayWiseScrumUpdate == null)
+            {
+                existingSession.DayWiseScrumUpdate = new DayWiseScrumUpdate
+                {
+                    GeneratedTime = scrumUpdate.GeneratedTimeUtc,
+                    WhatIDidYesterday = scrumUpdate.WhatIDidYesterday,
+                    WhatIPlanToDoToday = scrumUpdate.WhatIPlanToDoToday,
+                    Blocker = scrumUpdate.Blocker
+                };
+            }
+            else
+            {
+                existingSession.DayWiseScrumUpdate.GeneratedTime = scrumUpdate.GeneratedTimeUtc;
+                existingSession.DayWiseScrumUpdate.WhatIDidYesterday = scrumUpdate.WhatIDidYesterday;
+                existingSession.DayWiseScrumUpdate.WhatIPlanToDoToday = scrumUpdate.WhatIPlanToDoToday;
+                existingSession.DayWiseScrumUpdate.Blocker = scrumUpdate.Blocker;
+            }
+
+            existingSession.UpdatedDate = DateTime.UtcNow;
+            await dbContext.SaveChangesAsync();
+            return existingSession;
+        }
 
         var session = new ChatSession
         {
             UserId = DefaultUserId,
-            Title = $"Chat {sessionCount + 1}",
+            Title = $"Scrum Update {scrumUpdate.ScrumDate:yyyy-MM-dd}",
+            ScrumDate = scrumUpdate.ScrumDate,
             CreatedDate = DateTime.UtcNow,
-            UpdatedDate = DateTime.UtcNow
+            UpdatedDate = DateTime.UtcNow,
+            DayWiseScrumUpdate = new DayWiseScrumUpdate
+            {
+                GeneratedTime = scrumUpdate.GeneratedTimeUtc,
+                WhatIDidYesterday = scrumUpdate.WhatIDidYesterday,
+                WhatIPlanToDoToday = scrumUpdate.WhatIPlanToDoToday,
+                Blocker = scrumUpdate.Blocker
+            }
         };
 
         dbContext.ChatSessions.Add(session);
@@ -36,6 +70,7 @@ public class ChatSessionService
     {
         return await dbContext.ChatSessions
             .Where(s => s.UserId == DefaultUserId)
+            .Include(s => s.DayWiseScrumUpdate)
             .OrderByDescending(s => s.UpdatedDate)
             .ToListAsync();
     }
@@ -44,6 +79,7 @@ public class ChatSessionService
     {
         var session = await dbContext.ChatSessions
             .Include(s => s.Messages)
+            .Include(s => s.DayWiseScrumUpdate)
             .FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == DefaultUserId);
 
         if (session?.Messages != null)

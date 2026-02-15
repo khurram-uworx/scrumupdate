@@ -16,8 +16,9 @@ builder.Services.AddScoped<ChatSessionService>();
 builder.Services.AddHttpClient("WebClient", client => client.Timeout = TimeSpan.FromSeconds(600));
 
 // Use the dummy chat client instead of Ollama
-IChatClient chatClient = new DummyChatClient();
-builder.Services.AddChatClient(chatClient)
+var dummyChatClient = new DummyChatClient();
+builder.Services.AddSingleton<IScrumUpdateGenerator>(dummyChatClient);
+builder.Services.AddChatClient(dummyChatClient)
     .UseFunctionInvocation()
     //.UseLogging()
     .UseOpenTelemetry(configure: c =>
