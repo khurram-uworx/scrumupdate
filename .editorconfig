@@ -97,3 +97,48 @@ csharp_style_conditional_delegate_call = true:suggestion
 
 # Modifier preferences
 csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:suggestion
+
+# Naming Conventions
+# No underscore prefix for private fields - leverage implicit private access modifier
+# Format: dotnet_naming_rule.<name>.symbols = <symbol_group>
+#         dotnet_naming_rule.<name>.style = <style>
+#         dotnet_naming_rule.<name>.severity = <severity>
+
+# Private fields (no underscore prefix)
+dotnet_naming_rule.private_fields_no_prefix.symbols = private_fields
+dotnet_naming_rule.private_fields_no_prefix.style = private_field_style
+dotnet_naming_rule.private_fields_no_prefix.severity = suggestion
+
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private
+dotnet_naming_symbols.private_fields.required_modifiers = 
+
+dotnet_naming_style.private_field_style.capitalization = camel_case
+dotnet_naming_style.private_field_style.required_prefix = 
+dotnet_naming_style.private_field_style.required_suffix = 
+
+# Public members - PascalCase
+dotnet_naming_rule.public_members_pascal_case.symbols = public_members
+dotnet_naming_rule.public_members_pascal_case.style = pascal_case_style
+dotnet_naming_rule.public_members_pascal_case.severity = suggestion
+
+dotnet_naming_symbols.public_members.applicable_kinds = property,method,field,event,delegate,class,struct,interface,enum
+dotnet_naming_symbols.public_members.applicable_accessibilities = public,internal,protected
+dotnet_naming_symbols.public_members.required_modifiers = 
+
+dotnet_naming_style.pascal_case_style.capitalization = pascal_case
+dotnet_naming_style.pascal_case_style.required_prefix = 
+dotnet_naming_style.pascal_case_style.required_suffix = 
+
+# Local variables and parameters - camelCase
+dotnet_naming_rule.locals_camel_case.symbols = locals
+dotnet_naming_rule.locals_camel_case.style = camel_case_style
+dotnet_naming_rule.locals_camel_case.severity = suggestion
+
+dotnet_naming_symbols.locals.applicable_kinds = local,parameter
+dotnet_naming_symbols.locals.applicable_accessibilities = *
+dotnet_naming_symbols.locals.required_modifiers = 
+
+dotnet_naming_style.camel_case_style.capitalization = camel_case
+dotnet_naming_style.camel_case_style.required_prefix = 
+dotnet_naming_style.camel_case_style.required_suffix = 

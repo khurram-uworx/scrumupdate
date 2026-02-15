@@ -1,10 +1,17 @@
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using ScrumUpdate.Web.Components;
+using ScrumUpdate.Web.Data;
 using ScrumUpdate.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.AddServiceDefaults();
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
+
+// Add Entity Framework with in-memory provider
+builder.Services.AddDbContext<ChatDbContext>(options =>
+    options.UseInMemoryDatabase("ChatDatabase"));
+
+builder.Services.AddScoped<ChatSessionService>();
 
 builder.Services.AddHttpClient("WebClient", client => client.Timeout = TimeSpan.FromSeconds(600));
 
@@ -24,7 +31,6 @@ builder.Services.AddChatClient(chatClient)
 
 var app = builder.Build();
 
-app.MapDefaultEndpoints();
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())

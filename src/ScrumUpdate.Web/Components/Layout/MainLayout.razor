@@ -1,9 +1,65 @@
-﻿@inherits LayoutComponentBase
+@inherits LayoutComponentBase
+@using ScrumUpdate.Web.Data
+@using ScrumUpdate.Web.Services
+@inject ChatSessionService SessionService
 
-@Body
+<div class="layout-container">
+    <ChatSessionList CurrentSessionId="@currentSessionId"
+                     Sessions="@sessions"
+                     OnNewChat="OnNewChatClick"
+                     OnSessionSelected="OnSessionSelectedAsync" />
+    <CascadingValue Name="CurrentSessionId" Value="currentSessionId">
+        <CascadingValue Name="NewChatVersion" Value="newChatVersion">
+            <CascadingValue Name="OnSessionChanged" Value="onSessionChanged">
+                <main>
+                    @Body
+                </main>
+            </CascadingValue>
+        </CascadingValue>
+    </CascadingValue>
+</div>
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.
     <a href="." class="reload">Reload</a>
     <span class="dismiss">🗙</span>
 </div>
+
+@code {
+    int? currentSessionId;
+    int newChatVersion;
+    List<ChatSession> sessions = [];
+    Func<int, Task> onSessionChanged = _ => Task.CompletedTask;
+
+    protected override async Task OnInitializedAsync()
+    {
+        onSessionChanged = HandleSessionChangedAsync;
+        await RefreshSessionsAsync();
+    }
+
+    async Task HandleSessionChangedAsync(int sessionId)
+    {
+        currentSessionId = sessionId;
+        await RefreshSessionsAsync();
+        await InvokeAsync(StateHasChanged);
+    }
+
+    Task OnNewChatClick()
+    {
+        currentSessionId = null;
+        newChatVersion++;
+        return Task.CompletedTask;
+    }
+
+    Task OnSessionSelectedAsync(int sessionId)
+    {
+        currentSessionId = sessionId;
+        return Task.CompletedTask;
+    }
+
+    async Task RefreshSessionsAsync()
+    {
+        sessions = await SessionService.GetSessionsAsync();
+    }
+}
+

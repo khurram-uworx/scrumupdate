@@ -1,65 +1,174 @@
-# Scrum Update
+# ScrumUpdate Chat Module
 
-Scrum Update is a Blazor-based chat application built with .NET 10 that provides a conversational interface. This application demonstrates a simple chat interface with a dummy AI response for testing and development purposes.
+Multi-session Blazor chat with event-driven state management. MVVM + ChatStateService event bus for loose component coupling.
 
->[!NOTE]
-> This application uses a dummy AI client that returns simulated responses. No external AI service or Ollama installation is required to run this application.
+**Tech Stack**: Blazor Interactive Server (.NET 10), EF Core (in-memory), 20 integration tests
 
-## Features
+**Run**: `dotnet run --project src/ScrumUpdate.Web` | **Test**: `dotnet test`
 
-- **Blazor Server** - Interactive web UI with real-time updates
-- **Dummy AI Client** - Simulated responses for testing without external dependencies
-- **.NET 10** - Built with the latest .NET framework
-- **Easy to extend** - Replace the dummy client with your preferred AI provider (Ollama, Azure OpenAI, etc.)
+## Architecture
 
-# Setup
+### Layering
 
-## Prerequisites
+| Layer | Classes | Responsibility |
+|-------|---------|-----------------|
+| **UI** | MainLayout, Chat, ChatSessionList | Render state, subscribe to events |
+| **ViewModel** | ChatViewModel | Owns Messages, CurrentSession; fires local events |
+| **Service** | ChatStateService, ChatSessionService | Cross-component events, DB ops |
+| **Data** | ChatDbContext, ChatSession, ChatMessageEntity | Persistence |
 
-- **.NET 10 SDK** - Required to build and run the application
-- **Visual Studio 2022+** or **Visual Studio Code** with C# Dev Kit
+### Single Source of Truth
 
+**ChatViewModel** owns mutable state:
+```csharp
+ChatSession? currentSession;
+List<ChatMessage> messages;
+public ChatSession? CurrentSession => currentSession;
+public IReadOnlyList<ChatMessage> Messages => messages.AsReadOnly();
+public event Action? OnMessagesChanged, OnSessionChanged;
+```
 
-# Running the application
+### Event Bus: ChatStateService
 
-## Using Visual Studio
+Coordinates state changes across components:
 
-1. Open the `.sln` file in Visual Studio.
-2. Press `Ctrl+F5` or click the "Start" button in the toolbar to run the project.
+| Event | Fired By | Subscribed By | Trigger |
+|-------|----------|---------------|---------|
+| `OnSessionCreated` | ChatViewModel | MainLayout, ChatSessionList | New session created |
+| `OnSessionSelected` | ChatViewModel | MainLayout | Session switched |
+| `OnNewChatRequested` | Chat | MainLayout | New chat initiated |
 
-## Using Visual Studio Code
+**Pattern**: ViewModel → ChatStateService → Components → StateHasChanged()
 
-1. Open the project folder in Visual Studio Code.
-2. Install the [C# Dev Kit extension](https://marketplace.visualstudio.com/items?itemName=ms-dotnettools.csdevkit) for Visual Studio Code.
-3. Once installed, Open the `Program.cs` file in the ScrumUpdate.AppHost project.
-4. Run the project by clicking the "Run" button in the Debug view.
+### Data Flows
 
-## Trust the localhost certificate
+**Session Creation**:
+```
+ChatHeader.OnNewChat() → Chat.OnNewChatAsync() 
+→ ChatViewModel.CreateNewChatAsync() → ChatSessionService.CreateSessionAsync() 
+→ ChatStateService.NotifySessionCreated(id) → MainLayout/ChatSessionList re-render
+```
 
-Several Aspire templates include ASP.NET Core projects that are configured to use HTTPS by default. If this is the first time you're running the project, an exception might occur when loading the Aspire dashboard. This error can be resolved by trusting the self-signed development certificate with the .NET CLI.
+**Session Switching**:
+```
+ChatSessionList click → MainLayout.OnSessionSelected(id) 
+→ ChatStateService.NotifySessionSelected(id) → Chat.OnLoadSessionAsync(id) 
+→ ChatViewModel.LoadSessionAsync(id) → ChatSessionService.GetSessionAsync(id) 
+→ Load messages → MainLayout/ChatSessionList re-render
+```
 
-See [Troubleshoot untrusted localhost certificate in Aspire](https://learn.microsoft.com/dotnet/aspire/troubleshooting/untrusted-localhost-certificate) for more information.
+### File Structure
+```
+src/ScrumUpdate.Web/
+├── Components/Layout/MainLayout.razor
+├── Components/Pages/Chat/Chat.razor
+├── Components/{ChatSessionList,MessageList,Input,Suggestions}.razor
+├── ViewModels/ChatViewModel.cs
+├── Services/{ChatStateService,ChatSessionService,ChatSessionManager}.cs
+├── Data/ChatDbContext.cs
+└── Program.cs
+```
 
-# Updating JavaScript dependencies
+## Design Decisions
 
-This template leverages JavaScript libraries to provide essential functionality. These libraries are located in the wwwroot/lib folder of the ScrumUpdate.Web project. For instructions on updating each dependency, please refer to the README.md file in each respective folder.
+**Event Bus over component coupling**: Loose coupling, scalable subscriptions, testable, decoupled from UI
 
-## Customizing the AI Client
+**ViewModel fires service events**: Ensures all mutations notify immediately via single entry point
 
-The application currently uses a `DummyChatClient` that returns simulated responses. To integrate a real AI provider:
+**Scoped ChatStateService**: One instance per component tree; scoped ChatViewModel per page
 
-1. Modify `Program.cs` in the ScrumUpdate.Web project
-2. Replace the `DummyChatClient` registration with your preferred AI provider
-3. Example with Ollama:
-   ```csharp
-   // Instead of:
-   // IChatClient chatClient = new DummyChatClient();
+## Key Patterns
 
-   // Use:
-   IChatClient chatClient = new OllamaApiClient(new Uri("http://localhost:11434"), "llama2");
-   ```
+### Subscription/Cleanup
+```csharp
+protected override async Task OnInitializedAsync() {
+    ChatStateService.OnSessionCreated += OnSessionCreatedAsync;  // Subscribe
+    await viewModel.InitializeAsync();
+}
 
-# Learn More
-To learn more about development with .NET and AI, check out the following links:
+async ValueTask IAsyncDisposable.DisposeAsync() {
+    ChatStateService.OnSessionCreated -= OnSessionCreatedAsync;  // Unsubscribe
+}
+```
 
-* [AI for .NET Developers](https://learn.microsoft.com/dotnet/ai/)
+### Streaming with Cancellation
+```csharp
+CancellationTokenSource? responseCancel;
+
+public async Task AddUserMessageAndGetResponseAsync(ChatMessage msg) {
+    responseCancel = new();
+    await foreach (var update in _chatClient.GetStreamingResponseAsync(..., responseCancel.Token)) {
+        currentResponseMessage.Content += update.Text;
+        NotifyResponseMessageChanged();
+    }
+}
+
+public void CancelResponse() => _responseCancel?.Cancel();  // Cancel on session switch
+```
+
+### Safe Session Switching
+```csharp
+public async Task LoadSessionAsync(int sessionId) {
+    CancelAnyCurrentResponse();       // ← Cancel before loading
+    await SaveCurrentSessionAsync();  // ← Save state
+    var session = await _sessionService.GetSessionAsync(sessionId);
+    // ... load new session
+    await _chatStateService.NotifySessionSelected(sessionId);
+}
+```
+
+## Database Schema
+```csharp
+public class ChatSession {
+    public int Id { get; set; }
+    public string UserId { get; set; }
+    public string Title { get; set; }
+    public DateTime CreatedDate { get; set; }
+    public DateTime UpdatedDate { get; set; }
+    public ICollection<ChatMessageEntity> Messages { get; set; }
+}
+
+public class ChatMessageEntity {
+    public int Id { get; set; }
+    public int ChatSessionId { get; set; }
+    public string Role { get; set; }  // "User", "Assistant", "System"
+    public string Content { get; set; }
+    public DateTime Timestamp { get; set; }
+}
+```
+
+## Configuration
+
+**DI Setup** (Program.cs):
+```csharp
+builder.Services.AddScoped<ChatStateService>();
+builder.Services.AddScoped<ChatSessionService>();
+IChatClient chatClient = new DummyChatClient();
+builder.Services.AddDbContext<ChatDbContext>(options =>
+    options.UseInMemoryDatabase("ChatDatabase"));
+```
+
+**Replace AI Client**:
+- **Ollama**: `new OllamaApiClient(new Uri("http://localhost:11434"), "llama2")`
+- **Azure OpenAI**: `new AzureOpenAIClient(endpoint, credentials).AsChatClient("gpt-4")`
+
+**Upgrade DB** (from in-memory to SQL):
+```csharp
+builder.Services.AddDbContext<ChatDbContext>(options =>
+    options.UseSqlServer(config["ConnectionStrings:DefaultConnection"]));
+// Then: dotnet ef migrations add InitialCreate && dotnet ef database update
+```
+
+## Tests
+20 integration tests in `src/ScrumUpdate.Tests/ChatViewModelIntegrationTests.cs`:
+- Session CRUD, switching, message isolation
+- Persistence, event notifications, streaming cancellation
+
+```powershell
+dotnet test
+```
+
+## Documentation
+- **LEARNINGS.md** - Design decisions, anti-patterns, learned lessons
+- **ISSUES.md** - Issue tracker with resolution notes
+- **.github/copilot-instructions.md** - Code conventions & patterns

@@ -1,0 +1,58 @@
+@using ScrumUpdate.Web.Data
+
+<aside class="chat-sidebar">
+    <div class="sidebar-header">
+        <h2>Chats</h2>
+        <button class="new-chat-btn" @onclick="OnNewChatClick" title="New Chat">
+            ➕
+        </button>
+    </div>
+
+    <div class="sessions-list">
+        @if (Sessions.Count == 0)
+        {
+            <p class="no-sessions">No chats yet</p>
+        }
+        else
+        {
+            @foreach (var session in Sessions)
+            {
+                <div class="session-item @(IsCurrentSession(session.Id) ? "active" : "")"
+                     @onclick="@(() => SelectSessionAsync(session.Id))">
+                    <span class="session-title">@session.Title</span>
+                    <span class="session-date">@session.UpdatedDate.ToString("MMM d")</span>
+                </div>
+            }
+        }
+    </div>
+</aside>
+
+@code {
+    [Parameter]
+    public int? CurrentSessionId { get; set; }
+
+    [Parameter]
+    public EventCallback OnNewChat { get; set; }
+
+    [Parameter]
+    public EventCallback<int> OnSessionSelected { get; set; }
+
+    [Parameter]
+    public IReadOnlyList<ChatSession> Sessions { get; set; } = [];
+
+    bool IsCurrentSession(int sessionId)
+    {
+        return CurrentSessionId == sessionId;
+    }
+
+    async Task OnNewChatClick()
+    {
+        await OnNewChat.InvokeAsync();
+    }
+
+    async Task SelectSessionAsync(int sessionId)
+    {
+        await OnSessionSelected.InvokeAsync(sessionId);
+    }
+}
+

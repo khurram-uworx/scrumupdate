@@ -9,7 +9,7 @@ namespace ScrumUpdate.Web.Services;
 /// </summary>
 public class DummyChatClient : IChatClient
 {
-    private const string DummyResponse = "I am dummy AI and don't know how to respond";
+    const string DummyResponse = "I am dummy AI and don't know how to respond";
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> chatMessages,

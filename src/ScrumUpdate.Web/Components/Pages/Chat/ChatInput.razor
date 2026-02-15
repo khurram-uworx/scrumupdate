@@ -15,8 +15,8 @@
 </EditForm>
 
 @code {
-    private ElementReference textArea;
-    private string? messageText;
+    ElementReference textArea;
+    string? messageText;
 
     [Parameter]
     public EventCallback<ChatMessage> OnSend { get; set; }
@@ -24,7 +24,7 @@
     public ValueTask FocusAsync()
         => textArea.FocusAsync();
 
-    private async Task SendMessageAsync()
+    async Task SendMessageAsync()
     {
         if (messageText is { Length: > 0 } text)
         {

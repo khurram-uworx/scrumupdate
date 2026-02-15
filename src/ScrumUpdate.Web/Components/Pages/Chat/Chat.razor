@@ -1,97 +1,270 @@
 @page "/"
-@using System.ComponentModel
+@using ScrumUpdate.Web.Data
+@using ScrumUpdate.Web.Services
+@inject ChatSessionService SessionService
 @inject IChatClient ChatClient
-@inject NavigationManager Nav
-@implements IDisposable
+@implements IAsyncDisposable
 
-<PageTitle>Chat - Scrum Update</PageTitle>
+<PageTitle>Scrum Update</PageTitle>
 
-<ChatHeader OnNewChat="@ResetConversationAsync" />
+<ChatHeader />
 
-<ChatMessageList Messages="@messages" InProgressMessage="@currentResponseMessage">
+<ChatMessageList Messages="@messages.ToArray()" InProgressMessage="@currentResponseMessage">
     <NoMessagesContent>
         <div>Welcome to Scrum Update! Start a conversation with the AI assistant.</div>
     </NoMessagesContent>
 </ChatMessageList>
 
 <div class="chat-container">
-    <ChatSuggestions OnSelected="@AddUserMessageAsync" @ref="@chatSuggestions" />
-    <ChatInput OnSend="@AddUserMessageAsync" @ref="@chatInput" />
-    <SurveyPrompt /> @* Remove this line to eliminate the template survey message *@
+    <ChatSuggestions OnSelected="@OnAddUserMessageAsync" @ref="@chatSuggestions" />
+    <ChatInput OnSend="@OnAddUserMessageAsync" @ref="@chatInput" />
+    <SurveyPrompt />
 </div>
 
 @code {
-    private const string SystemPrompt = @"
+    const string SystemPrompt = @"
         You are a helpful assistant. Provide clear and concise responses.
         Use only simple markdown to format your responses.
         ";
 
-    private int statefulMessageCount;
-    private readonly ChatOptions chatOptions = new();
-    private readonly List<ChatMessage> messages = new();
-    private CancellationTokenSource? currentResponseCancellation;
-    private ChatMessage? currentResponseMessage;
-    private ChatInput? chatInput;
-    private ChatSuggestions? chatSuggestions;
+    readonly ChatOptions chatOptions = new();
+    readonly List<ChatMessage> messages = [];
 
-    protected override void OnInitialized()
+    ChatInput? chatInput;
+    ChatSuggestions? chatSuggestions;
+    ChatSession? currentSession;
+    ChatMessage? currentResponseMessage;
+    CancellationTokenSource? currentResponseCancellation;
+
+    int statefulMessageCount;
+    bool initialized;
+    int handledNewChatVersion = -1;
+
+    [CascadingParameter(Name = "CurrentSessionId")]
+    public int? RequestedSessionId { get; set; }
+
+    [CascadingParameter(Name = "NewChatVersion")]
+    public int NewChatVersion { get; set; }
+
+    [CascadingParameter(Name = "OnSessionChanged")]
+    public Func<int, Task>? OnSessionChanged { get; set; }
+
+    protected override async Task OnParametersSetAsync()
     {
-        statefulMessageCount = 0;
-        messages.Add(new(ChatRole.System, SystemPrompt));
-        chatOptions.Tools = [];
+        if (!initialized)
+        {
+            initialized = true;
+            handledNewChatVersion = NewChatVersion;
+            await InitializeAsync();
+
+            if (RequestedSessionId is int initialSessionId && initialSessionId != currentSession?.Id)
+            {
+                await LoadSessionAsync(initialSessionId);
+                await FocusInputAsync();
+            }
+
+            return;
+        }
+
+        if (NewChatVersion != handledNewChatVersion)
+        {
+            handledNewChatVersion = NewChatVersion;
+            await CreateNewChatAsync();
+            await FocusInputAsync();
+            return;
+        }
+
+        if (RequestedSessionId is int sessionId && sessionId != currentSession?.Id)
+        {
+            await LoadSessionAsync(sessionId);
+            await FocusInputAsync();
+        }
     }
 
-    private async Task AddUserMessageAsync(ChatMessage userMessage)
+    async Task InitializeAsync()
+    {
+        statefulMessageCount = 0;
+        messages.Clear();
+        messages.Add(new(ChatRole.System, SystemPrompt));
+        chatOptions.Tools = [];
+        await CreateNewSessionAsync();
+    }
+
+    async Task CreateNewChatAsync()
+    {
+        CancelAnyCurrentResponse();
+        await SaveCurrentSessionAsync();
+        await CreateNewSessionAsync();
+
+        messages.Clear();
+        messages.Add(new(ChatRole.System, SystemPrompt));
+        chatOptions.ConversationId = null;
+        statefulMessageCount = 0;
+
+        chatSuggestions?.Clear();
+        await NotifySessionChangedAsync();
+        StateHasChanged();
+    }
+
+    async Task LoadSessionAsync(int sessionId)
+    {
+        CancelAnyCurrentResponse();
+        await SaveCurrentSessionAsync();
+
+        var session = await SessionService.GetSessionAsync(sessionId);
+        if (session == null)
+        {
+            return;
+        }
+
+        currentSession = session;
+        messages.Clear();
+        messages.Add(new(ChatRole.System, SystemPrompt));
+
+        if (session.Messages is { Count: > 0 })
+        {
+            foreach (var messageEntity in session.Messages)
+            {
+                var role = messageEntity.Role.ToLowerInvariant() switch
+                {
+                    "user" => ChatRole.User,
+                    "assistant" => ChatRole.Assistant,
+                    _ => ChatRole.System
+                };
+
+                messages.Add(new ChatMessage(role, [new TextContent(messageEntity.Content)]));
+            }
+        }
+
+        chatOptions.ConversationId = null;
+        statefulMessageCount = 0;
+
+        chatSuggestions?.Update(messages);
+        await NotifySessionChangedAsync();
+        StateHasChanged();
+    }
+
+    async Task OnAddUserMessageAsync(ChatMessage userMessage)
+    {
+        await AddUserMessageAndGetResponseAsync(userMessage);
+        chatSuggestions?.Update(messages);
+        await FocusInputAsync();
+    }
+
+    async Task AddUserMessageAndGetResponseAsync(ChatMessage userMessage)
     {
         CancelAnyCurrentResponse();
 
-        // Add the user message to the conversation
         messages.Add(userMessage);
-        chatSuggestions?.Clear();
-        await chatInput!.FocusAsync();
+        StateHasChanged();
 
-        // Stream and display a new response from the IChatClient
-        var responseText = new TextContent("");
+        var responseText = new TextContent(string.Empty);
         currentResponseMessage = new ChatMessage(ChatRole.Assistant, [responseText]);
         currentResponseCancellation = new();
-        await foreach (var update in ChatClient.GetStreamingResponseAsync(messages.Skip(statefulMessageCount), chatOptions, currentResponseCancellation.Token))
+        StateHasChanged();
+
+        try
         {
-            messages.AddMessages(update, filter: c => c is not TextContent);
-            responseText.Text += update.Text;
-            chatOptions.ConversationId = update.ConversationId;
-            ChatMessageItem.NotifyChanged(currentResponseMessage);
+            await foreach (var update in ChatClient.GetStreamingResponseAsync(
+                messages.Skip(statefulMessageCount),
+                chatOptions,
+                currentResponseCancellation.Token))
+            {
+                messages.AddMessages(update, filter: c => c is not TextContent);
+                responseText.Text += update.Text;
+                chatOptions.ConversationId = update.ConversationId;
+                StateHasChanged();
+            }
+
+            messages.Add(currentResponseMessage!);
+            statefulMessageCount = chatOptions.ConversationId is not null ? messages.Count : 0;
+            currentResponseMessage = null;
+            StateHasChanged();
+        }
+        catch (OperationCanceledException)
+        {
+            messages.Add(currentResponseMessage!);
+            currentResponseMessage = null;
+            StateHasChanged();
         }
 
-        // Store the final response in the conversation, and begin getting suggestions
-        messages.Add(currentResponseMessage!);
-        statefulMessageCount = chatOptions.ConversationId is not null ? messages.Count : 0;
-        currentResponseMessage = null;
-        chatSuggestions?.Update(messages);
+        await SaveCurrentSessionAsync();
+        await NotifySessionChangedAsync();
     }
 
-    private void CancelAnyCurrentResponse()
+    async Task SaveCurrentSessionAsync()
     {
-        // If a response was cancelled while streaming, include it in the conversation so it's not lost
+        if (currentSession == null || messages.Count <= 1)
+        {
+            return;
+        }
+
+        var messagesToSave = messages
+            .Where(m => m.Role != ChatRole.System)
+            .Select(m => (m.Role.ToString(), ExtractMessageContent(m)))
+            .Where(m => !string.IsNullOrWhiteSpace(m.Item2))
+            .ToList();
+
+        if (messagesToSave.Count == 0)
+        {
+            return;
+        }
+
+        await SessionService.SaveSessionAsync(currentSession.Id, messagesToSave);
+    }
+
+    async Task CreateNewSessionAsync()
+    {
+        currentSession = await SessionService.CreateSessionAsync();
+    }
+
+    async Task NotifySessionChangedAsync()
+    {
+        if (currentSession != null && OnSessionChanged != null)
+        {
+            await OnSessionChanged.Invoke(currentSession.Id);
+        }
+    }
+
+    static string ExtractMessageContent(ChatMessage message)
+    {
+        if (message.Contents == null || message.Contents.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var textContents = message.Contents
+            .OfType<TextContent>()
+            .Select(c => c.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t));
+
+        return string.Concat(textContents);
+    }
+
+    void CancelAnyCurrentResponse()
+    {
         if (currentResponseMessage is not null)
         {
             messages.Add(currentResponseMessage);
+            StateHasChanged();
         }
 
         currentResponseCancellation?.Cancel();
         currentResponseMessage = null;
     }
 
-    private async Task ResetConversationAsync()
+    async Task FocusInputAsync()
     {
-        CancelAnyCurrentResponse();
-        messages.Clear();
-        messages.Add(new(ChatRole.System, SystemPrompt));
-        chatOptions.ConversationId = null;
-        statefulMessageCount = 0;
-        chatSuggestions?.Clear();
-        await chatInput!.FocusAsync();
+        if (chatInput != null)
+        {
+            await chatInput.FocusAsync();
+        }
     }
 
-    public void Dispose()
-        => currentResponseCancellation?.Cancel();
+    async ValueTask IAsyncDisposable.DisposeAsync()
+    {
+        currentResponseCancellation?.Cancel();
+        currentResponseCancellation?.Dispose();
+        await SaveCurrentSessionAsync();
+    }
 }
