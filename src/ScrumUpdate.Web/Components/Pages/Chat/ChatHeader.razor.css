@@ -4,7 +4,49 @@
 }
 
 .chat-header-controls {
-    margin-bottom: 1.5rem; 
+    margin-bottom: 1rem;
+    display: flex;
+    gap: 0.5rem;
+}
+
+.jira-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.45rem 0.85rem;
+    border-radius: 0.5rem;
+    background-color: #0052cc;
+    color: white;
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.jira-button:hover {
+    background-color: #0747a6;
+}
+
+.jira-button-secondary {
+    background-color: #f4f5f7;
+    color: #172b4d;
+}
+
+.jira-button-secondary:hover {
+    background-color: #dfe1e6;
+}
+
+.jira-status {
+    margin: 0 0 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.jira-status-success {
+    color: #1f7a1f;
+}
+
+.jira-status-error {
+    color: #a33a00;
 }
 
 h1 {

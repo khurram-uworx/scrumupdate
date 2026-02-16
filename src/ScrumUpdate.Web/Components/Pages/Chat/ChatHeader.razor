@@ -1,6 +1,39 @@
+@using Microsoft.AspNetCore.WebUtilities
+@inject NavigationManager NavigationManager
+
 <div class="chat-header-container main-background-gradient">
     <div class="chat-header-controls page-width">
+        <a class="jira-button" href="/auth/atlassian/login?returnUrl=/">Connect Jira</a>
+        <a class="jira-button jira-button-secondary" href="/auth/atlassian/disconnect">Disconnect</a>
     </div>
+
+    @if (jiraAuthState == "connected")
+    {
+        <p class="jira-status jira-status-success page-width">Jira account connected.</p>
+    }
+    else if (jiraAuthState == "failed")
+    {
+        <p class="jira-status jira-status-error page-width">Jira authentication failed. Try connecting again.</p>
+    }
 
     <h1 class="page-width">Scrum Update</h1>
 </div>
+
+@code {
+    string? jiraAuthState;
+
+    protected override void OnInitialized()
+    {
+        var uri = NavigationManager.ToAbsoluteUri(NavigationManager.Uri);
+        if (string.IsNullOrEmpty(uri.Query))
+        {
+            return;
+        }
+
+        var query = QueryHelpers.ParseQuery(uri.Query);
+        if (query.TryGetValue("jiraAuth", out var authState))
+        {
+            jiraAuthState = authState.ToString();
+        }
+    }
+}

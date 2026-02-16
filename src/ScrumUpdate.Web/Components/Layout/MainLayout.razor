@@ -1,23 +1,53 @@
 @inherits LayoutComponentBase
 @using ScrumUpdate.Web.Data
 @using ScrumUpdate.Web.Services
+@using ScrumUpdate.Web.Services.Atlassian
 @inject ChatSessionService SessionService
+@inject AtlassianOAuthService AtlassianOAuthService
+@inject IHttpContextAccessor HttpContextAccessor
+@inject NavigationManager NavigationManager
 
-<div class="layout-container">
-    <ChatSessionList CurrentSessionId="@currentSessionId"
-                     Sessions="@sessions"
-                     OnNewChat="OnNewChatClick"
-                     OnSessionSelected="OnSessionSelectedAsync" />
-    <CascadingValue Name="CurrentSessionId" Value="currentSessionId">
-        <CascadingValue Name="NewChatVersion" Value="newChatVersion">
-            <CascadingValue Name="OnSessionChanged" Value="onSessionChanged">
-                <main>
-                    @Body
-                </main>
+@if (isLoadingAccess)
+{
+    <div class="access-gate">
+        <div class="access-gate-card">
+            <h1>Checking access...</h1>
+            <p>Validating your Jira sign-in status.</p>
+        </div>
+    </div>
+}
+else if (!hasAccess)
+{
+    <div class="access-gate">
+        <div class="access-gate-card">
+            <h1>Sign in with Jira to continue</h1>
+            <p>Connecting Jira is required before you can use Scrum Update features.</p>
+            @if (!string.IsNullOrWhiteSpace(accessErrorMessage))
+            {
+                <p class="access-error">@accessErrorMessage</p>
+            }
+            <a class="btn-default" href="@jiraLoginUrl">Connect Jira</a>
+        </div>
+    </div>
+}
+else
+{
+    <div class="layout-container">
+        <ChatSessionList CurrentSessionId="@currentSessionId"
+                         Sessions="@sessions"
+                         OnNewChat="OnNewChatClick"
+                         OnSessionSelected="OnSessionSelectedAsync" />
+        <CascadingValue Name="CurrentSessionId" Value="currentSessionId">
+            <CascadingValue Name="NewChatVersion" Value="newChatVersion">
+                <CascadingValue Name="OnSessionChanged" Value="onSessionChanged">
+                    <main>
+                        @Body
+                    </main>
+                </CascadingValue>
             </CascadingValue>
         </CascadingValue>
-    </CascadingValue>
-</div>
+    </div>
+}
 
 <div id="blazor-error-ui" data-nosnippet>
     An unhandled error has occurred.
@@ -30,15 +60,62 @@
     int newChatVersion;
     List<ChatSession> sessions = [];
     Func<int, Task> onSessionChanged = _ => Task.CompletedTask;
+    bool isLoadingAccess = true;
+    bool hasAccess;
+    string? accessErrorMessage;
+    string jiraLoginUrl = "/auth/atlassian/login?returnUrl=%2F";
 
     protected override async Task OnInitializedAsync()
     {
         onSessionChanged = HandleSessionChangedAsync;
-        await RefreshSessionsAsync();
+        await ResolveAccessAsync();
+
+        if (hasAccess)
+        {
+            await RefreshSessionsAsync();
+        }
+    }
+
+    async Task ResolveAccessAsync()
+    {
+        isLoadingAccess = true;
+        accessErrorMessage = null;
+
+        try
+        {
+            var currentUri = new Uri(NavigationManager.Uri);
+            var returnUrl = string.IsNullOrWhiteSpace(currentUri.PathAndQuery) ? "/" : currentUri.PathAndQuery;
+            jiraLoginUrl = $"/auth/atlassian/login?returnUrl={Uri.EscapeDataString(returnUrl)}";
+
+            var httpContext = HttpContextAccessor.HttpContext;
+            if (httpContext == null)
+            {
+                hasAccess = false;
+                accessErrorMessage = "Unable to resolve the current request context. Refresh the page and try again.";
+                return;
+            }
+
+            var status = await AtlassianOAuthService.GetConnectionStatusAsync(httpContext, CancellationToken.None);
+            hasAccess = status.Connected;
+        }
+        catch (Exception ex)
+        {
+            hasAccess = false;
+            accessErrorMessage = ex.Message;
+        }
+        finally
+        {
+            isLoadingAccess = false;
+        }
     }
 
     async Task HandleSessionChangedAsync(int sessionId)
     {
+        if (!hasAccess)
+        {
+            return;
+        }
+
         currentSessionId = sessionId;
         await RefreshSessionsAsync();
         await InvokeAsync(StateHasChanged);

@@ -45,9 +45,32 @@ Current setup:
 dotnet run --project src/ScrumUpdate.Web
 ```
 
-## Test
+## Jira OAuth Integration
 
-Current automated tests: **11**
+The app now supports Atlassian OAuth 2.0 (3LO) and Jira issue fetch endpoints.
+
+Set credentials (recommended via user-secrets):
+
+```powershell
+dotnet user-secrets --project src/ScrumUpdate.Web set "AtlassianOAuth:ClientId" "<your-client-id>"
+dotnet user-secrets --project src/ScrumUpdate.Web set "AtlassianOAuth:ClientSecret" "<your-client-secret>"
+```
+
+Atlassian app setup:
+- Callback URL must include `https://localhost:<port>/auth/atlassian/callback`
+- Required scopes:
+  - `read:jira-work`
+  - `read:jira-user`
+  - `offline_access`
+
+Implemented routes:
+- `GET /auth/atlassian/login?returnUrl=/`
+- `GET /auth/atlassian/callback`
+- `GET /auth/atlassian/status`
+- `GET /auth/atlassian/disconnect`
+- `GET /api/jira/issues?maxResults=25`
+
+## Test
 
 ```powershell
 dotnet test src/ScrumUpdate.Tests/ScrumUpdate.Tests.csproj

@@ -6,19 +6,23 @@ namespace ScrumUpdate.Web.Services;
 public class ChatSessionService
 {
     readonly ChatDbContext dbContext;
-    const string DefaultUserId = "default-user";
+    readonly ICurrentUserContext currentUserContext;
 
-    public ChatSessionService(ChatDbContext dbContext)
+    public ChatSessionService(ChatDbContext dbContext, ICurrentUserContext currentUserContext)
     {
         this.dbContext = dbContext;
+        this.currentUserContext = currentUserContext;
     }
 
     public async Task<ChatSession> GetOrCreateSessionForScrumUpdateAsync(GeneratedScrumUpdate scrumUpdate)
     {
+        var userId = currentUserContext.GetRequiredUserId();
+        await EnsureUserExistsAsync(userId);
+
         var existingSession = await dbContext.ChatSessions
             .Include(s => s.DayWiseScrumUpdate)
             .Include(s => s.Messages)
-            .FirstOrDefaultAsync(s => s.UserId == DefaultUserId && s.ScrumDate == scrumUpdate.ScrumDate);
+            .FirstOrDefaultAsync(s => s.UserId == userId && s.ScrumDate == scrumUpdate.ScrumDate);
 
         if (existingSession != null)
         {
@@ -26,6 +30,7 @@ public class ChatSessionService
             {
                 existingSession.DayWiseScrumUpdate = new DayWiseScrumUpdate
                 {
+                    UserId = userId,
                     GeneratedTime = scrumUpdate.GeneratedTimeUtc,
                     WhatIDidYesterday = scrumUpdate.WhatIDidYesterday,
                     WhatIPlanToDoToday = scrumUpdate.WhatIPlanToDoToday,
@@ -34,6 +39,7 @@ public class ChatSessionService
             }
             else
             {
+                existingSession.DayWiseScrumUpdate.UserId = userId;
                 existingSession.DayWiseScrumUpdate.GeneratedTime = scrumUpdate.GeneratedTimeUtc;
                 existingSession.DayWiseScrumUpdate.WhatIDidYesterday = scrumUpdate.WhatIDidYesterday;
                 existingSession.DayWiseScrumUpdate.WhatIPlanToDoToday = scrumUpdate.WhatIPlanToDoToday;
@@ -47,13 +53,14 @@ public class ChatSessionService
 
         var session = new ChatSession
         {
-            UserId = DefaultUserId,
+            UserId = userId,
             Title = $"Scrum Update {scrumUpdate.ScrumDate:yyyy-MM-dd}",
             ScrumDate = scrumUpdate.ScrumDate,
             CreatedDate = DateTime.UtcNow,
             UpdatedDate = DateTime.UtcNow,
             DayWiseScrumUpdate = new DayWiseScrumUpdate
             {
+                UserId = userId,
                 GeneratedTime = scrumUpdate.GeneratedTimeUtc,
                 WhatIDidYesterday = scrumUpdate.WhatIDidYesterday,
                 WhatIPlanToDoToday = scrumUpdate.WhatIPlanToDoToday,
@@ -68,8 +75,10 @@ public class ChatSessionService
 
     public async Task<List<ChatSession>> GetSessionsAsync()
     {
+        var userId = currentUserContext.GetRequiredUserId();
+
         return await dbContext.ChatSessions
-            .Where(s => s.UserId == DefaultUserId)
+            .Where(s => s.UserId == userId)
             .Include(s => s.DayWiseScrumUpdate)
             .OrderByDescending(s => s.UpdatedDate)
             .ToListAsync();
@@ -77,10 +86,12 @@ public class ChatSessionService
 
     public async Task<ChatSession?> GetSessionAsync(int sessionId)
     {
+        var userId = currentUserContext.GetRequiredUserId();
+
         var session = await dbContext.ChatSessions
             .Include(s => s.Messages)
             .Include(s => s.DayWiseScrumUpdate)
-            .FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == DefaultUserId);
+            .FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId);
 
         if (session?.Messages != null)
         {
@@ -96,31 +107,35 @@ public class ChatSessionService
 
     public async Task SaveMessageAsync(int sessionId, string role, string content)
     {
+        var userId = currentUserContext.GetRequiredUserId();
+        var session = await dbContext.ChatSessions.FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId);
+        if (session == null)
+        {
+            return;
+        }
+
         var message = new ChatMessageEntity
         {
             ChatSessionId = sessionId,
+            UserId = userId,
             Role = NormalizeRole(role),
             Content = content,
             Timestamp = DateTime.UtcNow
         };
 
         dbContext.ChatMessages.Add(message);
-
-        var session = await dbContext.ChatSessions.FindAsync(sessionId);
-        if (session != null)
-        {
-            session.UpdatedDate = DateTime.UtcNow;
-        }
+        session.UpdatedDate = DateTime.UtcNow;
 
         await dbContext.SaveChangesAsync();
     }
 
     public async Task SaveSessionAsync(int sessionId, IEnumerable<(string Role, string Content)> messages)
     {
-        var session = await dbContext.ChatSessions.FindAsync(sessionId);
+        var userId = currentUserContext.GetRequiredUserId();
+        var session = await dbContext.ChatSessions.FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId);
         if (session == null) return;
 
-        var existingMessages = dbContext.ChatMessages.Where(m => m.ChatSessionId == sessionId);
+        var existingMessages = dbContext.ChatMessages.Where(m => m.ChatSessionId == sessionId && m.UserId == userId);
         dbContext.ChatMessages.RemoveRange(existingMessages);
 
         foreach (var (role, content) in messages.Where(m => !string.IsNullOrWhiteSpace(m.Content)))
@@ -128,6 +143,7 @@ public class ChatSessionService
             var message = new ChatMessageEntity
             {
                 ChatSessionId = sessionId,
+                UserId = userId,
                 Role = NormalizeRole(role),
                 Content = content,
                 Timestamp = DateTime.UtcNow
@@ -141,8 +157,9 @@ public class ChatSessionService
 
     public async Task DeleteSessionAsync(int sessionId)
     {
-        var session = await dbContext.ChatSessions.FindAsync(sessionId);
-        if (session != null && session.UserId == DefaultUserId)
+        var userId = currentUserContext.GetRequiredUserId();
+        var session = await dbContext.ChatSessions.FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId);
+        if (session != null)
         {
             dbContext.ChatSessions.Remove(session);
             await dbContext.SaveChangesAsync();
@@ -151,13 +168,30 @@ public class ChatSessionService
 
     public async Task UpdateSessionTitleAsync(int sessionId, string title)
     {
-        var session = await dbContext.ChatSessions.FindAsync(sessionId);
+        var userId = currentUserContext.GetRequiredUserId();
+        var session = await dbContext.ChatSessions.FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId);
         if (session != null)
         {
             session.Title = title;
             session.UpdatedDate = DateTime.UtcNow;
             await dbContext.SaveChangesAsync();
         }
+    }
+
+    async Task EnsureUserExistsAsync(string userId)
+    {
+        var existing = await dbContext.AppUsers.AnyAsync(u => u.Id == userId);
+        if (existing)
+        {
+            return;
+        }
+
+        dbContext.AppUsers.Add(new AppUser
+        {
+            Id = userId,
+            CreatedDateUtc = DateTime.UtcNow
+        });
+        await dbContext.SaveChangesAsync();
     }
 
     static string NormalizeRole(string role)
