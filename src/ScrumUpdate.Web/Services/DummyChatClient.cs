@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.DependencyInjection;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 
@@ -12,13 +13,19 @@ public class DummyChatClient : IChatClient, IScrumUpdateGenerator
 {
     const string GenericResponse = "I am dummy AI and can generate scrum updates on request.";
     int generationCounter;
+    IServiceProvider? services;
+
+    public void SetServices(IServiceProvider serviceProvider)
+    {
+        services = serviceProvider;
+    }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> chatMessages,
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var response = BuildAssistantResponse(chatMessages);
+        var response = await BuildAssistantResponseAsync(chatMessages, cancellationToken);
 
         // Simulate streaming by yielding the response character by character
         var delay = 10; // milliseconds between characters
@@ -33,13 +40,13 @@ public class DummyChatClient : IChatClient, IScrumUpdateGenerator
         }
     }
 
-    public Task<ChatResponse> GetResponseAsync(
+    public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> chatMessages,
         ChatOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        var response = BuildAssistantResponse(chatMessages);
-        return Task.FromResult(new ChatResponse([new ChatMessage(ChatRole.Assistant, response)]));
+        var response = await BuildAssistantResponseAsync(chatMessages, cancellationToken);
+        return new ChatResponse([new ChatMessage(ChatRole.Assistant, response)]);
     }
 
     public GeneratedScrumUpdate? TryGenerateScrumUpdateForMessage(string userMessage)
@@ -108,11 +115,29 @@ public class DummyChatClient : IChatClient, IScrumUpdateGenerator
         };
     }
 
-    string BuildAssistantResponse(IEnumerable<ChatMessage> chatMessages)
+    async Task<string> BuildAssistantResponseAsync(IEnumerable<ChatMessage> chatMessages, CancellationToken cancellationToken)
     {
         var userMessage = ExtractLastUserText(chatMessages);
-        var scrumUpdate = TryGenerateScrumUpdateForMessage(userMessage);
+        var scrumUpdate = await TryGenerateScrumUpdateUsingServicesAsync(userMessage, cancellationToken)
+            ?? TryGenerateScrumUpdateForMessage(userMessage);
         return scrumUpdate == null ? GenericResponse : FormatScrumUpdateResponse(scrumUpdate);
+    }
+
+    async Task<GeneratedScrumUpdate?> TryGenerateScrumUpdateUsingServicesAsync(string userMessage, CancellationToken cancellationToken)
+    {
+        if (!IsScrumCommand(userMessage) || services is null)
+        {
+            return null;
+        }
+
+        using var scope = services.CreateScope();
+        var jiraDraftService = scope.ServiceProvider.GetService<JiraScrumUpdateDraftService>();
+        if (jiraDraftService is null)
+        {
+            return null;
+        }
+
+        return await jiraDraftService.TryGenerateAsync(cancellationToken);
     }
 
     static string ExtractLastUserText(IEnumerable<ChatMessage> chatMessages)
