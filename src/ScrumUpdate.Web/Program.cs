@@ -13,6 +13,7 @@ builder.Services.AddDbContext<ChatDbContext>(options =>
     options.UseInMemoryDatabase("ChatDatabase"));
 
 builder.Services.AddScoped<ChatSessionService>();
+builder.Services.AddScoped<JiraScrumUpdateDraftService>();
 builder.Services.AddScoped<ICurrentUserContext, HttpCurrentUserContext>();
 builder.Services.AddScoped<LocalUserContext>();
 builder.Services.AddScoped<AtlassianOAuthService>();
@@ -98,4 +99,5 @@ app.MapGet("/api/jira/issues", async (HttpContext context, AtlassianOAuthService
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
+dummyChatClient.SetServices(app.Services);
 app.Run();

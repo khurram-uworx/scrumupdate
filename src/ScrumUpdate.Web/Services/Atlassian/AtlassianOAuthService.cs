@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Globalization;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -64,7 +65,6 @@ public sealed class AtlassianOAuthService(
             ["redirect_uri"] = callbackUrl,
             ["state"] = state,
             ["response_type"] = "code",
-            ["prompt"] = "consent",
             ["code_challenge"] = codeChallenge,
             ["code_challenge_method"] = "S256"
         };
@@ -141,31 +141,7 @@ public sealed class AtlassianOAuthService(
 
     public async Task<IReadOnlyList<JiraIssueSummary>> GetMyOpenIssuesAsync(HttpContext httpContext, int maxResults, CancellationToken cancellationToken)
     {
-        var localUserId = localUserContext.GetOrCreateLocalUserId(httpContext);
-        var token = await dbContext.JiraOAuthTokens.FirstOrDefaultAsync(x => x.LocalUserId == localUserId, cancellationToken);
-        if (token is null)
-        {
-            throw new InvalidOperationException("Jira is not connected for this user.");
-        }
-        if (string.IsNullOrWhiteSpace(token.AuthenticatedUserId))
-        {
-            throw new InvalidOperationException("Connected Jira account is missing authenticated user identity. Reconnect your Jira account.");
-        }
-
-        var accessToken = await GetValidAccessTokenAsync(token, cancellationToken);
-        var cloudId = token.CloudId;
-        if (string.IsNullOrWhiteSpace(cloudId))
-        {
-            cloudId = await GetPreferredCloudIdAsync(accessToken, cancellationToken);
-            token.CloudId = cloudId;
-            token.UpdatedAtUtc = DateTime.UtcNow;
-            await dbContext.SaveChangesAsync(cancellationToken);
-        }
-
-        if (string.IsNullOrWhiteSpace(cloudId))
-        {
-            throw new InvalidOperationException("No Jira Cloud site is accessible with this token.");
-        }
+        var connectedContext = await GetConnectedUserContextAsync(httpContext, cancellationToken);
 
         var cappedMaxResults = Math.Clamp(maxResults, 1, 100);
         var jql = "assignee = currentUser() AND resolution = Unresolved ORDER BY updated DESC";
@@ -176,10 +152,10 @@ public sealed class AtlassianOAuthService(
             ["fields"] = "summary,status,updated,project"
         };
 
-        var relative = QueryHelpers.AddQueryString("/ex/jira/" + cloudId + "/rest/api/3/search", query);
+        var relative = QueryHelpers.AddQueryString("/ex/jira/" + connectedContext.CloudId + "/rest/api/3/search/jql", query);
         var client = httpClientFactory.CreateClient("AtlassianApi");
         using var request = new HttpRequestMessage(HttpMethod.Get, relative);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", connectedContext.AccessToken);
 
         using var response = await client.SendAsync(request, cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -213,6 +189,229 @@ public sealed class AtlassianOAuthService(
                 : string.Empty;
 
             issues.Add(new JiraIssueSummary(key, summary, status, updated, projectName));
+        }
+
+        return issues;
+    }
+
+    public async Task<JiraScrumContext> GetScrumContextForTodayAndYesterdayAsync(HttpContext httpContext, CancellationToken cancellationToken)
+    {
+        var connectedContext = await GetConnectedUserContextAsync(httpContext, cancellationToken);
+        var nowUtc = DateTime.UtcNow;
+        var today = DateOnly.FromDateTime(nowUtc);
+        var yesterday = today.AddDays(-1);
+        var windowStart = yesterday.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var windowEnd = today.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+
+        var fields = "summary,status,updated,project,worklog,comment";
+        var jql = "assignee = currentUser() AND statusCategory NOT IN (\"To Do\", \"Done\") ORDER BY updated DESC";
+        var issues = await SearchIssuesAsync(
+            connectedContext.CloudId,
+            connectedContext.AccessToken,
+            jql,
+            maxResults: 50,
+            fields,
+            expand: "changelog",
+            cancellationToken);
+
+        var activeIssues = new List<JiraScrumIssue>();
+        var worklogs = new List<JiraWorklogActivity>();
+        var comments = new List<JiraCommentActivity>();
+        var activities = new List<JiraChangeActivity>();
+
+        foreach (var issue in issues)
+        {
+            var issueKey = GetString(issue, "key") ?? string.Empty;
+            if (!issue.TryGetProperty("fields", out var issueFields) || issueFields.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var issueSummary = GetString(issueFields, "summary") ?? string.Empty;
+            var issueStatus = issueFields.TryGetProperty("status", out var statusValue) ? GetString(statusValue, "name") ?? string.Empty : string.Empty;
+            var issueUpdatedUtc = ParseDateTime(GetString(issueFields, "updated"));
+            var issueProject = issueFields.TryGetProperty("project", out var projectValue) ? GetString(projectValue, "name") ?? string.Empty : string.Empty;
+            activeIssues.Add(new JiraScrumIssue(issueKey, issueSummary, issueStatus, issueUpdatedUtc, issueProject));
+
+            if (issueFields.TryGetProperty("worklog", out var worklogValue) &&
+                worklogValue.ValueKind == JsonValueKind.Object &&
+                worklogValue.TryGetProperty("worklogs", out var worklogItems) &&
+                worklogItems.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var worklog in worklogItems.EnumerateArray())
+                {
+                    var authorId = worklog.TryGetProperty("author", out var authorValue) ? GetString(authorValue, "accountId") : null;
+                    if (!string.Equals(authorId, connectedContext.AuthenticatedUserId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var startedUtc = ParseDateTime(GetString(worklog, "started"));
+                    if (startedUtc < windowStart || startedUtc >= windowEnd)
+                    {
+                        continue;
+                    }
+
+                    var timeSpentSeconds = worklog.TryGetProperty("timeSpentSeconds", out var spentValue) && spentValue.ValueKind == JsonValueKind.Number
+                        ? spentValue.GetInt32()
+                        : 0;
+                    var commentText = worklog.TryGetProperty("comment", out var commentValue)
+                        ? ExtractAtlassianDocumentText(commentValue)
+                        : string.Empty;
+
+                    worklogs.Add(new JiraWorklogActivity(issueKey, issueSummary, startedUtc, timeSpentSeconds, commentText));
+                }
+            }
+
+            if (issueFields.TryGetProperty("comment", out var commentContainer) &&
+                commentContainer.ValueKind == JsonValueKind.Object &&
+                commentContainer.TryGetProperty("comments", out var commentItems) &&
+                commentItems.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var comment in commentItems.EnumerateArray())
+                {
+                    var authorId = comment.TryGetProperty("author", out var authorValue) ? GetString(authorValue, "accountId") : null;
+                    if (!string.Equals(authorId, connectedContext.AuthenticatedUserId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var createdUtc = ParseDateTime(GetString(comment, "created"));
+                    if (createdUtc < windowStart || createdUtc >= windowEnd)
+                    {
+                        continue;
+                    }
+
+                    var bodyText = comment.TryGetProperty("body", out var bodyValue)
+                        ? ExtractAtlassianDocumentText(bodyValue)
+                        : string.Empty;
+
+                    comments.Add(new JiraCommentActivity(issueKey, issueSummary, createdUtc, bodyText));
+                }
+            }
+
+            if (issue.TryGetProperty("changelog", out var changelogValue) &&
+                changelogValue.ValueKind == JsonValueKind.Object &&
+                changelogValue.TryGetProperty("histories", out var historyItems) &&
+                historyItems.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var history in historyItems.EnumerateArray())
+                {
+                    var authorId = history.TryGetProperty("author", out var authorValue) ? GetString(authorValue, "accountId") : null;
+                    if (!string.Equals(authorId, connectedContext.AuthenticatedUserId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    var changedUtc = ParseDateTime(GetString(history, "created"));
+                    if (changedUtc < windowStart || changedUtc >= windowEnd)
+                    {
+                        continue;
+                    }
+
+                    if (!history.TryGetProperty("items", out var changedItems) || changedItems.ValueKind != JsonValueKind.Array)
+                    {
+                        continue;
+                    }
+
+                    foreach (var changedItem in changedItems.EnumerateArray())
+                    {
+                        var field = GetString(changedItem, "field") ?? string.Empty;
+                        var fromValue = GetString(changedItem, "fromString") ?? string.Empty;
+                        var toValue = GetString(changedItem, "toString") ?? string.Empty;
+                        activities.Add(new JiraChangeActivity(issueKey, issueSummary, changedUtc, field, fromValue, toValue));
+                    }
+                }
+            }
+        }
+
+        return new JiraScrumContext(
+            GeneratedAtUtc: nowUtc,
+            Yesterday: yesterday,
+            Today: today,
+            ActiveIssues: activeIssues.OrderByDescending(x => x.UpdatedUtc).ToList(),
+            Worklogs: worklogs.OrderByDescending(x => x.StartedUtc).ToList(),
+            Comments: comments.OrderByDescending(x => x.CreatedUtc).ToList(),
+            Activities: activities.OrderByDescending(x => x.ChangedUtc).ToList());
+    }
+
+    async Task<ConnectedUserContext> GetConnectedUserContextAsync(HttpContext httpContext, CancellationToken cancellationToken)
+    {
+        var localUserId = localUserContext.GetOrCreateLocalUserId(httpContext);
+        var token = await dbContext.JiraOAuthTokens.FirstOrDefaultAsync(x => x.LocalUserId == localUserId, cancellationToken);
+        if (token is null)
+        {
+            throw new InvalidOperationException("Jira is not connected for this user.");
+        }
+
+        if (string.IsNullOrWhiteSpace(token.AuthenticatedUserId))
+        {
+            throw new InvalidOperationException("Connected Jira account is missing authenticated user identity. Reconnect your Jira account.");
+        }
+
+        var accessToken = await GetValidAccessTokenAsync(token, cancellationToken);
+        var cloudId = token.CloudId;
+        if (string.IsNullOrWhiteSpace(cloudId))
+        {
+            cloudId = await GetPreferredCloudIdAsync(accessToken, cancellationToken);
+            token.CloudId = cloudId;
+            token.UpdatedAtUtc = DateTime.UtcNow;
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+
+        if (string.IsNullOrWhiteSpace(cloudId))
+        {
+            throw new InvalidOperationException("No Jira Cloud site is accessible with this token.");
+        }
+
+        return new ConnectedUserContext(cloudId, accessToken, token.AuthenticatedUserId);
+    }
+
+    async Task<List<JsonElement>> SearchIssuesAsync(
+        string cloudId,
+        string accessToken,
+        string jql,
+        int maxResults,
+        string fields,
+        string? expand,
+        CancellationToken cancellationToken)
+    {
+        var query = new Dictionary<string, string?>
+        {
+            ["jql"] = jql,
+            ["maxResults"] = Math.Clamp(maxResults, 1, 100).ToString(CultureInfo.InvariantCulture),
+            ["fields"] = fields
+        };
+
+        if (!string.IsNullOrWhiteSpace(expand))
+        {
+            query["expand"] = expand;
+        }
+
+        var relative = QueryHelpers.AddQueryString("/ex/jira/" + cloudId + "/rest/api/3/search/jql", query);
+        var client = httpClientFactory.CreateClient("AtlassianApi");
+        using var request = new HttpRequestMessage(HttpMethod.Get, relative);
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+        using var response = await client.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            logger.LogWarning("Failed to search Jira issues. Status={StatusCode}, Body={Body}", (int)response.StatusCode, body);
+            throw new InvalidOperationException("Failed to fetch Jira issues.");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var json = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        if (!json.RootElement.TryGetProperty("issues", out var issuesElement) || issuesElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        var issues = new List<JsonElement>();
+        foreach (var issue in issuesElement.EnumerateArray())
+        {
+            issues.Add(issue.Clone());
         }
 
         return issues;
@@ -422,6 +621,71 @@ public sealed class AtlassianOAuthService(
         return propertyValue.ValueKind == JsonValueKind.String ? propertyValue.GetString() : propertyValue.ToString();
     }
 
+    static DateTime ParseDateTime(string? value)
+    {
+        if (!DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+        {
+            return DateTime.MinValue;
+        }
+
+        return parsed.UtcDateTime;
+    }
+
+    static string ExtractAtlassianDocumentText(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            return element.GetString() ?? string.Empty;
+        }
+
+        if (element.ValueKind != JsonValueKind.Object && element.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        AppendAtlassianDocumentText(element, builder);
+        return builder.ToString().Trim();
+    }
+
+    static void AppendAtlassianDocumentText(JsonElement element, StringBuilder builder)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("text", out var textValue) && textValue.ValueKind == JsonValueKind.String)
+            {
+                var text = textValue.GetString();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    if (builder.Length > 0)
+                    {
+                        builder.Append(' ');
+                    }
+
+                    builder.Append(text);
+                }
+            }
+
+            if (element.TryGetProperty("content", out var contentValue) && contentValue.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in contentValue.EnumerateArray())
+                {
+                    AppendAtlassianDocumentText(child, builder);
+                }
+            }
+
+            return;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var child in element.EnumerateArray())
+            {
+                AppendAtlassianDocumentText(child, builder);
+            }
+        }
+    }
+
     static void ClearOAuthHandshakeCookies(HttpContext httpContext)
     {
         httpContext.Response.Cookies.Delete(OAuthStateCookieName);
@@ -451,4 +715,6 @@ public sealed class AtlassianOAuthService(
         public string Name { get; set; } = string.Empty;
         public List<string> Scopes { get; set; } = [];
     }
+
+    sealed record ConnectedUserContext(string CloudId, string AccessToken, string AuthenticatedUserId);
 }
