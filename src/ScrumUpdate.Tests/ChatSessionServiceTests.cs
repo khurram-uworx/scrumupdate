@@ -14,7 +14,7 @@ public class ChatSessionServiceTests
     public void Setup()
     {
         dbContext = TestDatabaseFixture.CreateTestDbContext();
-        sessionService = new ChatSessionService(dbContext);
+        sessionService = new ChatSessionService(dbContext, new FakeCurrentUserContext());
     }
 
     [TearDown]
@@ -140,6 +140,44 @@ public class ChatSessionServiceTests
 
         Assert.That(loadedChat2!.Messages.Select(m => (m.Role, m.Content)),
             Is.EqualTo(new[] { ("user", "hey there"), ("assistant", "hi again") }));
+    }
+
+    [Test]
+    public async Task SameScrumDate_IsolatedAcrossDifferentUsers()
+    {
+        var userAService = new ChatSessionService(dbContext, new FakeCurrentUserContext("atlassian-user-a"));
+        var userBService = new ChatSessionService(dbContext, new FakeCurrentUserContext("atlassian-user-b"));
+        var scrumDate = new DateOnly(2026, 2, 15);
+
+        var a = await userAService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(scrumDate));
+        var b = await userBService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(scrumDate));
+
+        Assert.That(a.Id, Is.Not.EqualTo(b.Id));
+        Assert.That(await dbContext.ChatSessions.CountAsync(), Is.EqualTo(2));
+
+        var sessionsForA = await userAService.GetSessionsAsync();
+        var sessionsForB = await userBService.GetSessionsAsync();
+        Assert.That(sessionsForA.Select(s => s.Id), Is.EqualTo(new[] { a.Id }));
+        Assert.That(sessionsForB.Select(s => s.Id), Is.EqualTo(new[] { b.Id }));
+    }
+
+    [Test]
+    public async Task UserCannotReadOrWriteAnotherUsersSession()
+    {
+        var userAService = new ChatSessionService(dbContext, new FakeCurrentUserContext("atlassian-user-a"));
+        var userBService = new ChatSessionService(dbContext, new FakeCurrentUserContext("atlassian-user-b"));
+        var session = await userAService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(new DateOnly(2026, 2, 15)));
+
+        await userAService.SaveMessageAsync(session.Id, "user", "my private update");
+        var fromUserB = await userBService.GetSessionAsync(session.Id);
+        await userBService.SaveMessageAsync(session.Id, "assistant", "should not be saved");
+
+        Assert.That(fromUserB, Is.Null);
+
+        var fromUserA = await userAService.GetSessionAsync(session.Id);
+        Assert.That(fromUserA, Is.Not.Null);
+        Assert.That(fromUserA!.Messages.Count, Is.EqualTo(1));
+        Assert.That(fromUserA.Messages.First().Content, Is.EqualTo("my private update"));
     }
 
     static GeneratedScrumUpdate CreateScrumUpdate(DateOnly scrumDate)

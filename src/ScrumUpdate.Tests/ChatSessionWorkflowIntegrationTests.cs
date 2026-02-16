@@ -16,7 +16,7 @@ public class ChatSessionWorkflowIntegrationTests
     public Task Setup()
     {
         dbContext = TestDatabaseFixture.CreateTestDbContext();
-        sessionService = new ChatSessionService(dbContext);
+        sessionService = new ChatSessionService(dbContext, new FakeCurrentUserContext());
         workflow = new TestChatWorkflow(sessionService, new DummyChatClient());
         return Task.CompletedTask;
     }
