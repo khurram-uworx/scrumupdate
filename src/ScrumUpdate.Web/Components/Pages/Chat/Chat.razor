@@ -4,6 +4,7 @@
 @inject ChatSessionService SessionService
 @inject IChatClient ChatClient
 @inject IScrumUpdateGenerator ScrumUpdateGenerator
+@inject ScrumUpdateTools ScrumUpdateTools
 @implements IAsyncDisposable
 
 <PageTitle>Scrum Update</PageTitle>
@@ -26,6 +27,9 @@
     const string SystemPrompt = @"
         You are a helpful assistant. Provide clear and concise responses.
         Use only simple markdown to format your responses.
+        When the user asks for a scrum update or asks to regenerate one, call the GenerateScrumUpdateDraftAsync tool.
+        If the tool returns a scrum update, generate user's scrum update using the returned information,
+        keeping what you did, what you will do and blocker sections, presenting in a nicely formatted markdown
         ";
 
     readonly ChatOptions chatOptions = new();
@@ -87,7 +91,7 @@
         statefulMessageCount = 0;
         messages.Clear();
         messages.Add(new(ChatRole.System, SystemPrompt));
-        chatOptions.Tools = [];
+        chatOptions.Tools = [AIFunctionFactory.Create(ScrumUpdateTools.GenerateScrumUpdateDraftAsync)];
     }
 
     async Task CreateNewChatAsync()

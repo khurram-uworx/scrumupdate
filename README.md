@@ -13,7 +13,8 @@ Blazor chat app for generating day-wise scrum updates as PoC of Blackboard Archi
 Current setup:
 - .NET 10 Blazor Interactive Server
 - EF Core InMemory database (dev only)
-- `DummyChatClient` (no real LLM yet)
+- `DummyChatClient` in Development
+- Gemini (`Google.GenAI` via `IChatClient`) in non-Development environments
 
 ## Behavior
 
@@ -68,7 +69,20 @@ Implemented routes:
 - `GET /auth/atlassian/callback`
 - `GET /auth/atlassian/status`
 - `GET /auth/atlassian/disconnect`
-- `GET /api/jira/issues?maxResults=25`
+
+## Gemini Setup
+
+Set API key (recommended via user-secrets):
+
+```powershell
+dotnet user-secrets --project src/ScrumUpdate.Web set "Gemini:ApiKey" "<your-google-api-key>"
+```
+
+Optional model override:
+
+```powershell
+dotnet user-secrets --project src/ScrumUpdate.Web set "Gemini:Model" "gemini-2.5-flash"
+```
 
 ## Test
 

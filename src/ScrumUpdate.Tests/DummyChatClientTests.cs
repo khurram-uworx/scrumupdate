@@ -9,7 +9,8 @@ public class DummyChatClientTests
     [Test]
     public async Task GetResponseAsync_NonScrumMessage_ReturnsGenericChatResponse()
     {
-        var client = new DummyChatClient();
+        var generator = new ScrumGenerator();
+        var client = new DummyChatClient(generator);
 
         var response = await client.GetResponseAsync(
         [
@@ -22,7 +23,8 @@ public class DummyChatClientTests
     [Test]
     public async Task GetResponseAsync_ScrumUpdateAndRegenerate_ReturnDifferentScrumMessages()
     {
-        var client = new DummyChatClient();
+        var generator = new ScrumGenerator();
+        var client = new DummyChatClient(generator);
 
         var first = await client.GetResponseAsync(
         [
@@ -45,11 +47,11 @@ public class DummyChatClientTests
     [Test]
     public void TryGenerateScrumUpdateForMessage_OnlyGeneratesForExpectedCommands()
     {
-        var client = new DummyChatClient();
+        var generator = new ScrumGenerator();
 
-        var none = client.TryGenerateScrumUpdateForMessage("hey");
-        var scrum = client.TryGenerateScrumUpdateForMessage("scrum update");
-        var regenerated = client.TryGenerateScrumUpdateForMessage("regenerate");
+        var none = generator.TryGenerateScrumUpdateForMessage("hey");
+        var scrum = generator.TryGenerateScrumUpdateForMessage("scrum update");
+        var regenerated = generator.TryGenerateScrumUpdateForMessage("regenerate");
 
         Assert.That(none, Is.Null);
         Assert.That(scrum, Is.Not.Null);
@@ -60,12 +62,13 @@ public class DummyChatClientTests
     [Test]
     public async Task TryParseGeneratedScrumUpdateFromAssistantMessage_ParsesOnlyScrumResponses()
     {
-        var client = new DummyChatClient();
+        var generator = new ScrumGenerator();
+        var client = new DummyChatClient(generator);
         var generic = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "hello")]);
         var scrum = await client.GetResponseAsync([new ChatMessage(ChatRole.User, "scrum update")]);
 
-        var genericParsed = client.TryParseGeneratedScrumUpdateFromAssistantMessage(generic.Messages.Single().Text ?? string.Empty);
-        var scrumParsed = client.TryParseGeneratedScrumUpdateFromAssistantMessage(scrum.Messages.Single().Text ?? string.Empty);
+        var genericParsed = generator.TryParseGeneratedScrumUpdateFromAssistantMessage(generic.Messages.Single().Text ?? string.Empty);
+        var scrumParsed = generator.TryParseGeneratedScrumUpdateFromAssistantMessage(scrum.Messages.Single().Text ?? string.Empty);
 
         Assert.That(genericParsed, Is.Null);
         Assert.That(scrumParsed, Is.Not.Null);

@@ -17,7 +17,8 @@ public class ChatSessionWorkflowIntegrationTests
     {
         dbContext = TestDatabaseFixture.CreateTestDbContext();
         sessionService = new ChatSessionService(dbContext, new FakeCurrentUserContext());
-        workflow = new TestChatWorkflow(sessionService, new DummyChatClient());
+        var scrumGenerator = new ScrumGenerator();
+        workflow = new TestChatWorkflow(sessionService, new DummyChatClient(scrumGenerator), scrumGenerator);
         return Task.CompletedTask;
     }
 
@@ -63,14 +64,16 @@ public class ChatSessionWorkflowIntegrationTests
     {
         readonly ChatSessionService sessionService;
         readonly DummyChatClient chatClient;
+        readonly IScrumUpdateGenerator scrumUpdateGenerator;
         readonly List<ChatMessage> messages = [];
 
         public int? CurrentSessionId { get; private set; }
 
-        public TestChatWorkflow(ChatSessionService sessionService, DummyChatClient chatClient)
+        public TestChatWorkflow(ChatSessionService sessionService, DummyChatClient chatClient, IScrumUpdateGenerator scrumUpdateGenerator)
         {
             this.sessionService = sessionService;
             this.chatClient = chatClient;
+            this.scrumUpdateGenerator = scrumUpdateGenerator;
         }
 
         public async Task SendAsync(string userText)
@@ -80,7 +83,7 @@ public class ChatSessionWorkflowIntegrationTests
             var response = await chatClient.GetResponseAsync(messages);
             messages.Add(response.Messages.Single());
 
-            var generatedScrumUpdate = chatClient.TryParseGeneratedScrumUpdateFromAssistantMessage(response.Messages.Single().Text ?? string.Empty);
+            var generatedScrumUpdate = scrumUpdateGenerator.TryParseGeneratedScrumUpdateFromAssistantMessage(response.Messages.Single().Text ?? string.Empty);
 
             if (generatedScrumUpdate != null)
             {

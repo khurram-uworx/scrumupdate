@@ -1,3 +1,4 @@
+using Google.GenAI;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using ScrumUpdate.Web.Components;
@@ -14,11 +15,13 @@ builder.Services.AddDbContext<ChatDbContext>(options =>
 
 builder.Services.AddScoped<ChatSessionService>();
 builder.Services.AddScoped<JiraScrumUpdateDraftService>();
+builder.Services.AddScoped<ScrumUpdateTools>();
 builder.Services.AddScoped<ICurrentUserContext, HttpCurrentUserContext>();
 builder.Services.AddScoped<LocalUserContext>();
 builder.Services.AddScoped<AtlassianOAuthService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.Configure<AtlassianOAuthOptions>(builder.Configuration.GetSection(AtlassianOAuthOptions.SectionName));
+builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection(GeminiOptions.SectionName));
 
 builder.Services.AddHttpClient("WebClient", client => client.Timeout = TimeSpan.FromSeconds(600));
 builder.Services.AddHttpClient("AtlassianAuth", client =>
@@ -32,10 +35,11 @@ builder.Services.AddHttpClient("AtlassianApi", client =>
     client.Timeout = TimeSpan.FromSeconds(30);
 });
 
-// Use the dummy chat client instead of Ollama
-var dummyChatClient = new DummyChatClient();
-builder.Services.AddSingleton<IScrumUpdateGenerator>(dummyChatClient);
-builder.Services.AddChatClient(dummyChatClient)
+var scrumGenerator = new ScrumGenerator();
+builder.Services.AddSingleton<IScrumUpdateGenerator>(scrumGenerator);
+var dummyChatClient = new DummyChatClient(scrumGenerator);
+var chatClient = CreateChatClient(builder, dummyChatClient);
+builder.Services.AddChatClient(chatClient)
     .UseFunctionInvocation()
     .UseLogging()
     .UseOpenTelemetry(configure: c =>
@@ -83,21 +87,31 @@ app.MapGet("/auth/atlassian/disconnect", async (HttpContext context, AtlassianOA
     return await authService.DisconnectAsync(context, cancellationToken);
 });
 
-app.MapGet("/api/jira/issues", async (HttpContext context, AtlassianOAuthService authService, int? maxResults, CancellationToken cancellationToken) =>
-{
-    try
-    {
-        var issues = await authService.GetMyOpenIssuesAsync(context, maxResults ?? 25, cancellationToken);
-        return Results.Ok(issues);
-    }
-    catch (InvalidOperationException ex)
-    {
-        return Results.BadRequest(new { error = ex.Message });
-    }
-});
+//app.MapGet("/api/jira/issues", async (HttpContext context, AtlassianOAuthService authService, int? maxResults, CancellationToken cancellationToken) =>
+//{
+//    try
+//    {
+//        var issues = await authService.GetMyOpenIssuesAsync(context, maxResults ?? 25, cancellationToken);
+//        return Results.Ok(issues);
+//    }
+//    catch (InvalidOperationException ex)
+//    {
+//        return Results.BadRequest(new { error = ex.Message });
+//    }
+//});
 
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
-dummyChatClient.SetServices(app.Services);
 app.Run();
+
+static IChatClient CreateChatClient(WebApplicationBuilder builder, DummyChatClient dummyChatClient)
+{
+    var geminiOptions = builder.Configuration
+        .GetSection(GeminiOptions.SectionName)
+        .Get<GeminiOptions>() ?? new GeminiOptions();
+
+    return string.IsNullOrWhiteSpace(geminiOptions.ApiKey)
+        ? dummyChatClient
+        : new Client(apiKey: geminiOptions.ApiKey).AsIChatClient(defaultModelId: geminiOptions.Model);
+}
