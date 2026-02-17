@@ -3,12 +3,20 @@ Reimagining Enterprise / Business / Personal / Utility apps as conversationional
 
 ![The Blackbox Architecture](images/blackboard.png)
 
+## Blog posts
+
 - Blackboard Architecture: A Classic AI Model for Collaborative Problem Solving
 	- https://khurram-uworx.github.io/2026/02/15/Blackboard.html
+- From Theory to Practice: Implementing Blackboard Architecture in Modern Blazor Apps
+	- https://khurram-uworx.github.io/2026/02/17/Blackboard-2.html
+- ScrumUpdate Deep Dive
+	- https://khurram-uworx.github.io/2026/02/18/Blackboard-3.html
 
 # ScrumUpdate
 
 Blazor chat app for generating day-wise scrum updates as PoC of Blackboard Architecture / Shared World Model
+
+![PoC:ScrumUpdate](images/chat-ui.png)
 
 Current setup:
 - .NET 10 Blazor Interactive Server
@@ -21,11 +29,7 @@ Current setup:
 ## Behavior
 
 - Chat session is created only when a scrum update is generated.
-- Scrum update is generated only when user message contains:
-  - `scrum update`
-  - `regenerate`
-- `regenerate` creates a different scrum update message than the previous one.
-- Generated scrum update is stored in two places:
+- Generated scrum update is reflected in two places:
   - Chat message history (all generated versions are preserved)
   - Rich session data (`DayWiseScrumUpdate`) where only the latest generated version is kept
 - Sessions are unique by scrum date (`UserId + ScrumDate`).
@@ -50,7 +54,7 @@ dotnet run --project src/ScrumUpdate.Web
 
 ## Jira OAuth Integration
 
-The app now supports Atlassian OAuth 2.0 (3LO) and Jira issue fetch endpoints.
+The app supports Atlassian OAuth 2.0 (3LO) and fetching Jira information.
 
 Set credentials (recommended via user-secrets):
 
