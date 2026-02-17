@@ -24,16 +24,20 @@
 </div>
 
 @code {
-    const string SystemPrompt = @"
+    const string SystemPrompt = @"""
         You are a helpful assistant. Provide clear and concise responses.
-        Use only simple markdown to format your responses.
+
         When the user asks for a scrum update or asks to regenerate one, call the GenerateScrumUpdateDraftAsync tool.
+
         If the tool returns a scrum update, generate user's scrum update using the returned information,
-        keeping what you did, what you will do and blocker sections, presenting in a nicely formatted markdown
+        it must have what one did, what one will do and blocker sections.
+
+        Use only simple markdown to format your responses.
         ";
 
     readonly ChatOptions chatOptions = new();
     readonly List<ChatMessage> messages = [];
+    readonly Dictionary<ChatMessage, ChatMessageMetadata> messageMetadata = [];
 
     ChatInput? chatInput;
     ChatSuggestions? chatSuggestions;
@@ -90,6 +94,7 @@
     {
         statefulMessageCount = 0;
         messages.Clear();
+        messageMetadata.Clear();
         messages.Add(new(ChatRole.System, SystemPrompt));
         chatOptions.Tools = [AIFunctionFactory.Create(ScrumUpdateTools.GenerateScrumUpdateDraftAsync)];
     }
@@ -101,6 +106,7 @@
         currentSession = null;
 
         messages.Clear();
+        messageMetadata.Clear();
         messages.Add(new(ChatRole.System, SystemPrompt));
         chatOptions.ConversationId = null;
         statefulMessageCount = 0;
@@ -122,6 +128,7 @@
 
         currentSession = session;
         messages.Clear();
+        messageMetadata.Clear();
         messages.Add(new(ChatRole.System, SystemPrompt));
 
         if (session.Messages is { Count: > 0 })
@@ -135,7 +142,14 @@
                     _ => ChatRole.System
                 };
 
-                messages.Add(new ChatMessage(role, [new TextContent(messageEntity.Content)]));
+                var message = new ChatMessage(role, [new TextContent(messageEntity.Content)]);
+                var metadata = ChatSessionService.DeserializeMetadata(messageEntity.MetadataJson);
+                if (metadata != null)
+                {
+                    messageMetadata[message] = metadata;
+                }
+
+                messages.Add(message);
             }
         }
 
@@ -163,6 +177,7 @@
         var responseText = new TextContent(string.Empty);
         currentResponseMessage = new ChatMessage(ChatRole.Assistant, [responseText]);
         currentResponseCancellation = new();
+        ScrumUpdateTools.ResetCapturedGeneratedUpdates();
         StateHasChanged();
 
         try
@@ -191,10 +206,25 @@
         }
 
         var lastAssistantMessage = messages.LastOrDefault(m => m.Role == ChatRole.Assistant);
-        var assistantText = lastAssistantMessage == null ? string.Empty : ExtractMessageContent(lastAssistantMessage);
-        var generatedScrumUpdate = ScrumUpdateGenerator.TryParseGeneratedScrumUpdateFromAssistantMessage(assistantText);
+        var generatedScrumUpdate = ScrumUpdateTools.TryConsumeLatestGeneratedUpdate();
+
+        if (generatedScrumUpdate == null && lastAssistantMessage != null)
+        {
+            var assistantText = ExtractMessageContent(lastAssistantMessage);
+            generatedScrumUpdate = ScrumUpdateGenerator.TryParseGeneratedScrumUpdateFromAssistantMessage(assistantText);
+        }
+
         if (generatedScrumUpdate != null)
         {
+            if (lastAssistantMessage != null)
+            {
+                messageMetadata[lastAssistantMessage] = new ScrumGenerationMetadata
+                {
+                    ScrumUpdate = generatedScrumUpdate,
+                    CapturedAtUtc = DateTime.UtcNow
+                };
+            }
+
             await EnsureScrumSessionAsync(generatedScrumUpdate);
         }
 
@@ -214,11 +244,17 @@
 
         var transientMessages = messages
             .Where(m => m.Role == ChatRole.User || m.Role == ChatRole.Assistant)
-            .Select(m => new ChatMessage(m.Role, [new TextContent(ExtractMessageContent(m))]))
+            .Select(m =>
+            {
+                var transientMessage = new ChatMessage(m.Role, [new TextContent(ExtractMessageContent(m))]);
+                messageMetadata.TryGetValue(m, out var metadata);
+                return (Message: transientMessage, Metadata: metadata);
+            })
             .ToList();
 
         currentSession = session;
         messages.Clear();
+        messageMetadata.Clear();
         messages.Add(new(ChatRole.System, SystemPrompt));
 
         if (session.Messages is { Count: > 0 })
@@ -232,13 +268,28 @@
                     _ => ChatRole.System
                 };
 
-                messages.Add(new ChatMessage(role, [new TextContent(messageEntity.Content)]));
+                var message = new ChatMessage(role, [new TextContent(messageEntity.Content)]);
+                var metadata = ChatSessionService.DeserializeMetadata(messageEntity.MetadataJson);
+                if (metadata != null)
+                {
+                    messageMetadata[message] = metadata;
+                }
+
+                messages.Add(message);
             }
         }
 
         if (transientMessages.Count > 0)
         {
-            messages.AddRange(transientMessages);
+            foreach (var (message, metadata) in transientMessages)
+            {
+                if (metadata != null)
+                {
+                    messageMetadata[message] = metadata;
+                }
+
+                messages.Add(message);
+            }
         }
 
         chatOptions.ConversationId = null;
@@ -256,8 +307,12 @@
 
         var messagesToSave = messages
             .Where(m => m.Role != ChatRole.System)
-            .Select(m => (m.Role.ToString(), ExtractMessageContent(m)))
-            .Where(m => !string.IsNullOrWhiteSpace(m.Item2))
+            .Select(m =>
+            {
+                messageMetadata.TryGetValue(m, out var metadata);
+                return (Role: m.Role.ToString(), Content: ExtractMessageContent(m), Metadata: metadata);
+            })
+            .Where(m => !string.IsNullOrWhiteSpace(m.Content))
             .ToList();
 
         if (messagesToSave.Count == 0)

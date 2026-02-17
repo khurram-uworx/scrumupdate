@@ -19,6 +19,7 @@ public class ChatMessageEntity
     public string UserId { get; set; } = string.Empty;
     public string Role { get; set; } = string.Empty;
     public string Content { get; set; } = string.Empty;
+    public string? MetadataJson { get; set; }
     public DateTime Timestamp { get; set; }
     public ChatSession ChatSession { get; set; } = null!;
     public AppUser User { get; set; } = null!;
@@ -105,6 +106,7 @@ public class ChatDbContext(DbContextOptions<ChatDbContext> options) : DbContext(
             entity.Property(e => e.UserId).IsRequired();
             entity.Property(e => e.Role).IsRequired();
             entity.Property(e => e.Content).IsRequired();
+            entity.Property(e => e.MetadataJson).IsRequired(false);
             entity.HasOne(e => e.User)
                 .WithMany(u => u.ChatMessages)
                 .HasForeignKey(e => e.UserId)

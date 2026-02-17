@@ -113,6 +113,35 @@ public class ChatSessionServiceTests
     }
 
     [Test]
+    public async Task SaveSessionAsync_PersistsAndLoadsMessageMetadata()
+    {
+        var scrum = CreateScrumUpdate(new DateOnly(2026, 2, 15));
+        var session = await sessionService.GetOrCreateSessionForScrumUpdateAsync(scrum);
+
+        await sessionService.SaveSessionAsync(session.Id,
+        [
+            ("assistant", "scrum message", new ScrumGenerationMetadata
+            {
+                ScrumUpdate = scrum,
+                CapturedAtUtc = new DateTime(2026, 2, 15, 9, 45, 0, DateTimeKind.Utc)
+            })
+        ]);
+
+        var loaded = await sessionService.GetSessionAsync(session.Id);
+        Assert.That(loaded, Is.Not.Null);
+        Assert.That(loaded!.Messages.Count, Is.EqualTo(1));
+
+        var metadata = ChatSessionService.DeserializeMetadata(loaded.Messages.Single().MetadataJson);
+        Assert.That(metadata, Is.TypeOf<ScrumGenerationMetadata>());
+
+        var scrumMetadata = (ScrumGenerationMetadata)metadata!;
+        Assert.That(scrumMetadata.ScrumUpdate.WhatIDidYesterday, Is.EqualTo(scrum.WhatIDidYesterday));
+        Assert.That(scrumMetadata.ScrumUpdate.WhatIPlanToDoToday, Is.EqualTo(scrum.WhatIPlanToDoToday));
+        Assert.That(scrumMetadata.ScrumUpdate.Blocker, Is.EqualTo(scrum.Blocker));
+        Assert.That(scrumMetadata.CapturedAtUtc, Is.EqualTo(new DateTime(2026, 2, 15, 9, 45, 0, DateTimeKind.Utc)));
+    }
+
+    [Test]
     public async Task TwoSessions_KeepIndependentMessageHistoryWhenSwitchingDates()
     {
         var chat1 = await sessionService.GetOrCreateSessionForScrumUpdateAsync(CreateScrumUpdate(new DateOnly(2026, 2, 14)));

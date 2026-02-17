@@ -1,10 +1,14 @@
+using Anthropic;
+using Anthropic.Core;
 using Google.GenAI;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
+using OpenAI;
 using ScrumUpdate.Web.Components;
 using ScrumUpdate.Web.Data;
 using ScrumUpdate.Web.Services;
 using ScrumUpdate.Web.Services.Atlassian;
+using System.ClientModel;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents().AddInteractiveServerComponents();
@@ -22,6 +26,8 @@ builder.Services.AddScoped<AtlassianOAuthService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.Configure<AtlassianOAuthOptions>(builder.Configuration.GetSection(AtlassianOAuthOptions.SectionName));
 builder.Services.Configure<GeminiOptions>(builder.Configuration.GetSection(GeminiOptions.SectionName));
+builder.Services.Configure<ClaudeOptions>(builder.Configuration.GetSection(ClaudeOptions.SectionName));
+builder.Services.Configure<OpenAIOptions>(builder.Configuration.GetSection(OpenAIOptions.SectionName));
 
 builder.Services.AddHttpClient("WebClient", client => client.Timeout = TimeSpan.FromSeconds(600));
 builder.Services.AddHttpClient("AtlassianAuth", client =>
@@ -111,7 +117,39 @@ static IChatClient CreateChatClient(WebApplicationBuilder builder, DummyChatClie
         .GetSection(GeminiOptions.SectionName)
         .Get<GeminiOptions>() ?? new GeminiOptions();
 
-    return string.IsNullOrWhiteSpace(geminiOptions.ApiKey)
-        ? dummyChatClient
-        : new Client(apiKey: geminiOptions.ApiKey).AsIChatClient(defaultModelId: geminiOptions.Model);
+    if (!string.IsNullOrWhiteSpace(geminiOptions.ApiKey) && !string.IsNullOrWhiteSpace(geminiOptions.Model))
+        return new Client(apiKey: geminiOptions.ApiKey).AsIChatClient(defaultModelId: geminiOptions.Model);
+
+    var claudeOptions = builder.Configuration
+        .GetSection(ClaudeOptions.SectionName)
+        .Get<ClaudeOptions>() ?? new ClaudeOptions();
+
+    if (!string.IsNullOrWhiteSpace(claudeOptions.ApiKey) && !string.IsNullOrWhiteSpace(claudeOptions.Model))
+        return new AnthropicClient(new ClientOptions() { ApiKey = claudeOptions.ApiKey })
+            .AsIChatClient(claudeOptions.Model);
+
+    var openAIOptions = builder.Configuration
+        .GetSection(OpenAIOptions.SectionName)
+        .Get<OpenAIOptions>() ?? new OpenAIOptions();
+
+    if (!string.IsNullOrWhiteSpace(openAIOptions.ApiKey) && !string.IsNullOrWhiteSpace(openAIOptions.Model))
+    {
+        if (string.IsNullOrWhiteSpace(openAIOptions.ApiUrl))
+            return new OpenAIClient(openAIOptions.ApiKey)
+                .GetChatClient(openAIOptions.Model)
+                .AsIChatClient();
+        else
+        {
+            var options = new OpenAIClientOptions
+            {
+                Endpoint = new Uri(openAIOptions.ApiUrl)
+            };
+
+            return new OpenAIClient(new ApiKeyCredential(openAIOptions.ApiKey), options)
+                .GetChatClient(openAIOptions.Model)
+                .AsIChatClient();
+        }
+    }
+
+    return dummyChatClient;
 }

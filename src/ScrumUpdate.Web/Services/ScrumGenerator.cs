@@ -27,6 +27,7 @@ public sealed class ScrumGenerator : IScrumUpdateGenerator
         };
     }
 
+    [Obsolete("Prefer deterministic metadata from tool execution. This parser is kept for fallback/legacy flows.")]
     public GeneratedScrumUpdate? TryParseGeneratedScrumUpdateFromAssistantMessage(string assistantMessage)
     {
         if (string.IsNullOrWhiteSpace(assistantMessage))

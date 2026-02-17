@@ -9,6 +9,18 @@ public sealed class GeneratedScrumUpdate
     public string Blocker { get; init; } = string.Empty;
 }
 
+[System.Text.Json.Serialization.JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+[System.Text.Json.Serialization.JsonDerivedType(typeof(ScrumGenerationMetadata), typeDiscriminator: "scrum-generation")]
+public abstract class ChatMessageMetadata
+{
+}
+
+public sealed class ScrumGenerationMetadata : ChatMessageMetadata
+{
+    public required GeneratedScrumUpdate ScrumUpdate { get; init; }
+    public DateTime CapturedAtUtc { get; init; }
+}
+
 public interface IScrumUpdateGenerator
 {
     GeneratedScrumUpdate? TryGenerateScrumUpdateForMessage(string userMessage);

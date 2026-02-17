@@ -1,10 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using ScrumUpdate.Web.Data;
+using System.Text.Json;
 
 namespace ScrumUpdate.Web.Services;
 
 public class ChatSessionService
 {
+    static readonly JsonSerializerOptions MetadataSerializerOptions = new(JsonSerializerDefaults.Web);
+
     readonly ChatDbContext dbContext;
     readonly ICurrentUserContext currentUserContext;
 
@@ -105,7 +108,7 @@ public class ChatSessionService
         return session;
     }
 
-    public async Task SaveMessageAsync(int sessionId, string role, string content)
+    public async Task SaveMessageAsync(int sessionId, string role, string content, ChatMessageMetadata? metadata = null)
     {
         var userId = currentUserContext.GetRequiredUserId();
         var session = await dbContext.ChatSessions.FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId);
@@ -120,6 +123,7 @@ public class ChatSessionService
             UserId = userId,
             Role = NormalizeRole(role),
             Content = content,
+            MetadataJson = SerializeMetadata(metadata),
             Timestamp = DateTime.UtcNow
         };
 
@@ -131,6 +135,11 @@ public class ChatSessionService
 
     public async Task SaveSessionAsync(int sessionId, IEnumerable<(string Role, string Content)> messages)
     {
+        await SaveSessionAsync(sessionId, messages.Select(m => (m.Role, m.Content, Metadata: (ChatMessageMetadata?)null)));
+    }
+
+    public async Task SaveSessionAsync(int sessionId, IEnumerable<(string Role, string Content, ChatMessageMetadata? Metadata)> messages)
+    {
         var userId = currentUserContext.GetRequiredUserId();
         var session = await dbContext.ChatSessions.FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId);
         if (session == null) return;
@@ -138,7 +147,7 @@ public class ChatSessionService
         var existingMessages = dbContext.ChatMessages.Where(m => m.ChatSessionId == sessionId && m.UserId == userId);
         dbContext.ChatMessages.RemoveRange(existingMessages);
 
-        foreach (var (role, content) in messages.Where(m => !string.IsNullOrWhiteSpace(m.Content)))
+        foreach (var (role, content, metadata) in messages.Where(m => !string.IsNullOrWhiteSpace(m.Content)))
         {
             var message = new ChatMessageEntity
             {
@@ -146,6 +155,7 @@ public class ChatSessionService
                 UserId = userId,
                 Role = NormalizeRole(role),
                 Content = content,
+                MetadataJson = SerializeMetadata(metadata),
                 Timestamp = DateTime.UtcNow
             };
             dbContext.ChatMessages.Add(message);
@@ -197,5 +207,32 @@ public class ChatSessionService
     static string NormalizeRole(string role)
     {
         return role?.Trim().ToLowerInvariant() ?? string.Empty;
+    }
+
+    public static ChatMessageMetadata? DeserializeMetadata(string? metadataJson)
+    {
+        if (string.IsNullOrWhiteSpace(metadataJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<ChatMessageMetadata>(metadataJson, MetadataSerializerOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    static string? SerializeMetadata(ChatMessageMetadata? metadata)
+    {
+        if (metadata == null)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Serialize(metadata, MetadataSerializerOptions);
     }
 }

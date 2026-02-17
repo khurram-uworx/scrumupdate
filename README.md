@@ -14,7 +14,9 @@ Current setup:
 - .NET 10 Blazor Interactive Server
 - EF Core InMemory database (dev only)
 - `DummyChatClient` in Development
-- Gemini (`Google.GenAI` via `IChatClient`) in non-Development environments
+- Gemini (`Google.GenAI` via `IChatClient`) when configured
+- Claude (`Anthropic` via `IChatClient`) when configured
+- OpenAI (`OpenAI` via `IChatClient`) when configured
 
 ## Behavior
 
@@ -82,6 +84,34 @@ Optional model override:
 
 ```powershell
 dotnet user-secrets --project src/ScrumUpdate.Web set "Gemini:Model" "gemini-2.5-flash"
+```
+
+## Claude Setup
+
+Set API key (recommended via user-secrets):
+
+```powershell
+dotnet user-secrets --project src/ScrumUpdate.Web set "Claude:ApiKey" "<your-anthropic-api-key>"
+```
+
+Optional model override:
+
+```powershell
+dotnet user-secrets --project src/ScrumUpdate.Web set "Claude:Model" "claude-haiku-4-5"
+```
+
+## OpenAI Setup
+
+Set API key (recommended via user-secrets):
+
+```powershell
+dotnet user-secrets --project src/ScrumUpdate.Web set "OpenAI:ApiKey" "<your-openai-api-key>"
+```
+
+Optional model override:
+
+```powershell
+dotnet user-secrets --project src/ScrumUpdate.Web set "OpenAI:Model" "gpt-4.1-mini"
 ```
 
 ## Test
