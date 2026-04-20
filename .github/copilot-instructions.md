@@ -1,144 +1,77 @@
-# Copilot Instructions for ScrumUpdate Chat Module
+# Copilot Instructions for ScrumUpdate
 
-> **IMPORTANT**: Review `LEARNINGS.md` before making changes to state management or event handling. It documents critical design patterns and anti-patterns learned from previous issues.
-> 
-> **Architecture**: See `README.md` for complete system design, layering, and data flow documentation.
+> **IMPORTANT**: Review `LEARNINGS.md` before making changes to state management or session flow.
+>
+> **Architecture baseline**: `README.md` describes product goals and integration setup.
 
 ## Project Context
-- **Framework**: Blazor with Interactive Server rendering (.NET 10)
-- **Architecture**: MVVM with service-based state management
-- **Database**: Entity Framework Core with in-memory provider
-- **Goal**: Multi-session isolated chat UI where users can create, switch, and persist conversations
+- **Framework**: Blazor Interactive Server (`net10.0`)
+- **Persistence**: EF Core InMemory provider (development-oriented)
+- **AI abstraction**: `Microsoft.Extensions.AI` + `IChatClient`
+- **Primary integrations**: Atlassian OAuth (Jira) + optional Gemini/Claude/OpenAI providers
 
-## File Organization
+## Current High-Level Structure
 
-```
+```text
 src/ScrumUpdate.Web/
 ├── Components/
-│   ├── Layout/
-│   │   └── MainLayout.razor
-│   ├── Pages/Chat/
-│   │   ├── Chat.razor
-│   │   ├── ChatHeader.razor
-│   │   └── ChatHeader.razor.css
+│   ├── Layout/MainLayout.razor
 │   ├── ChatSessionList.razor
-│   ├── ChatMessageList.razor
-│   ├── ChatInput.razor
-│   └── ChatSuggestions.razor
-├── ViewModels/
-│   └── ChatViewModel.cs
+│   └── Pages/Chat/*
 ├── Services/
 │   ├── ChatSessionService.cs
-│   ├── ChatStateService.cs
-│   ├── ChatSessionManager.cs
-│   └── DummyChatClient.cs
-├── Data/
-│   └── ChatDbContext.cs
+│   ├── JiraScrumUpdateDraftService.cs
+│   ├── ScrumUpdateTools.cs
+│   ├── ScrumGenerator.cs
+│   ├── HttpCurrentUserContext.cs
+│   └── Atlassian/*
+├── Data/ChatDbContext.cs
 └── Program.cs
+
+src/ScrumUpdate.Tests/
+└── NUnit tests for service/workflow behavior
 ```
 
-## Key Concepts
+## Architecture Notes (Current)
+- There is **no ChatViewModel/ChatStateService event bus** in the current implementation.
+- Session selection and new-chat coordination are handled by `MainLayout.razor` via cascading values (`CurrentSessionId`, `NewChatVersion`, `OnSessionChanged`).
+- `Chat.razor` owns in-page conversation state, handles streaming responses, and persists session messages through `ChatSessionService`.
+- Session persistence is keyed by `(UserId, ScrumDate)` through EF constraints and `GetOrCreateSessionForScrumUpdateAsync`.
 
-### ChatStateService (Event Bus)
-- **Shared service** injected into MainLayout and Chat components
-- **Events**: `OnNewChatRequested`, `OnSessionSelected`, `OnSessionCreated`
-- **Pattern**: Used for cross-component communication
+## Service Responsibilities
+- **`ChatSessionService`**: session CRUD, message persistence, metadata serialization/deserialization, and ensuring app user records exist.
+- **`AtlassianOAuthService`**: OAuth handshake, token storage/refresh, Jira data retrieval for draft context.
+- **`JiraScrumUpdateDraftService`**: maps Jira worklogs/comments/changelog into `GeneratedScrumUpdate` text fields.
+- **`ScrumUpdateTools`**: exposes tool-callable methods to the model and captures generated drafts for reliable persistence metadata.
+- **`HttpCurrentUserContext`**: maps local browser user to authenticated Jira user identity.
 
-### ChatViewModel (Business Logic)
-- **Scoped service** - one instance per component
-- **Public Properties**: `Messages`, `CurrentSession`, `CurrentResponseMessage`
-- **Public Events**: `OnMessagesChanged`, `OnResponseMessageChanged`, `OnSessionChanged`
-- **Responsibilities**: Message management, session switching, persistence, streaming
+## Coding Conventions
+- Private fields are `camelCase` (no underscore prefix).
+- Public types/members are `PascalCase`.
+- Keep async APIs truly async and pass `CancellationToken` through IO paths.
+- Keep DB access inside `ChatSessionService`/domain services rather than directly in UI components.
+- Avoid broad architectural rewrites unless explicitly requested.
 
-### Session Switching Pattern
-```csharp
-// CURRENT FLOW (has issues):
-1. User clicks session in sidebar
-2. ChatSessionList → MainLayout.OnSessionSelected() updates currentSessionId
-3. ChatStateService.NotifySessionSelected() fires
-4. Chat.OnLoadSessionAsync() called via event
-5. ChatViewModel.LoadSessionAsync() loads from DB
-// Problem: MainLayout.currentSessionId != ChatViewModel._currentSession synchronization
+## Blazor Conventions in This Repo
+- Use `[Parameter]` and `EventCallback<T>` for component contracts.
+- Use cascading parameters where the layout must coordinate state across multiple descendants.
+- Cancel active streaming operations before session switching/reset flows.
+- Keep system prompt/tool wiring in one place (`Chat.razor`) to avoid drift.
 
-// DESIRED FLOW:
-1-4. Same as above
-5. ChatViewModel updates and notifies via event
-6. MainLayout subscribes and updates currentSessionId
-```
-
-## Current Issues
-See **LEARNINGS.md** for documented patterns and anti-patterns from previous issues. Review before making changes to state management or event handling.
-
-## Coding Conventions Used
-
-### Unique to This Codebase
-- **Private fields**: `camelCase` without underscore prefix (no `_fieldName` pattern)
-  - ✅ `int sessionCount;` not `int _sessionCount;`
-  - Rationale: Leverage C# case-sensitivity; underscore prefix is noise
-- **Event naming**: `On{Event}Async` for async event handlers
-
-### Standard C# Patterns Applied
-- **Public members**: `PascalCase` (properties, methods, events, classes)
-- **Local variables & parameters**: `camelCase`
-- **Null coalescing**: `?? throw new ArgumentNullException()`
-- **Observable pattern**: Properties + Events for UI binding
-- **Disposal**: `IAsyncDisposable` for cleanup
-
-### Blazor Component Conventions
-- **Parameters**: `[Parameter]` for parent-child input
-- **Callbacks**: `EventCallback<T>` for child-to-parent events
-- **Lifecycle**: `OnInitializedAsync()` for setup, unsubscribe in `DisposeAsync()`
-- **Async/await**: All DB operations return `Task`/`Task<T>`, streaming uses `await foreach` with `CancellationToken`
-
-## When Modifying Code
-
-1. **Session state changes**: Must update both MainLayout and ChatViewModel
-2. **New service methods**: Add corresponding ChatStateService events
-3. **UI components**: Use event callbacks, avoid direct service calls
-4. **Database operations**: Use ChatSessionService, not DbContext directly
-5. **Streaming operations**: Always respect CancellationToken
-
-## Testing
-- See `src/ScrumUpdate.Tests/ChatViewModelIntegrationTests.cs`
-- ViewModel is fully testable without UI dependencies
-- Services use dependency injection for mockability
+## Testing Guidance
+- Add or update NUnit tests in `src/ScrumUpdate.Tests` for behavior changes.
+- Prefer service-level and workflow-level tests when UI behavior is driven by persistence/session rules.
+- Validate that message ordering and scrum-update persistence remain deterministic.
 
 ## Common Gotchas
-- **In-memory database**: Data lost on app restart (OK for dev)
-- **Streaming responses**: Must be cancelled before switching sessions
-- **Event subscriptions**: Always unsubscribe in disposal to avoid memory leaks
-- **StateHasChanged()**: Called automatically on event fires; manual calls only when needed
-- **null! suppression**: Used when type is guaranteed non-null at runtime
+- InMemory DB resets on restart.
+- Missing Jira auth context will throw from `HttpCurrentUserContext`; layout should gate access first.
+- Tool-captured scrum metadata is preferred; assistant-text parsing exists as fallback and should not be the primary path.
+- Updating docs that reference removed files (for example `ChatViewModel`) is part of keeping contributor guidance accurate.
 
 ## Contributing to LEARNINGS.md
-
-**Important**: When you encounter challenges, ambiguities, or make mistakes while working with this codebase:
-
-1. **Document what you learned** in `LEARNINGS.md` under an appropriate section
-2. **Add it as a "Anti-Pattern to Avoid"** or create a new "Specific Code Pattern" section
-3. **Include**:
-   - What went wrong / what was confusing
-   - Why it happened (root cause)
-   - How to avoid it next time
-   - Example code if applicable
-
-4. **Format**: Keep it succinct and scannable, use bullet points and code blocks
-
-5. **Goal**: Each Copilot agent session learns from previous mistakes, reducing iteration cycles
-
-**Example of what to add**:
-```markdown
-## Common Mistake: Forgetting to Notify ChatStateService
-
-When adding a new session operation, it's easy to forget to fire the corresponding event.
-
-✅ **DO**: 
-```csharp
-private async Task MyNewSessionOp() {
-    // ... business logic ...
-    await _chatStateService.NotifySessionCreated(id);  // ← Always notify
-}
-```
-✗ **DON'T**: Implement operation without any event notification
-```
-
+When a change reveals a recurring trap or ambiguous design area, add a concise entry to `LEARNINGS.md` with:
+1. What went wrong / was unclear
+2. Why it happened
+3. How to avoid it next time
+4. A minimal DO/DON'T example when useful
